@@ -62,7 +62,17 @@ val Wallpapers = listOf(
 
 fun paletteById(id: String): Palette = Palettes.firstOrNull { it.id == id } ?: Palettes.first()
 
-fun sceneTitle(id: String): String = when (sceneId(id)) {
+fun menuIconColor(id: String, accent: Color): Color = when (id) {
+    "accent" -> accent
+    "amber" -> Color(0xFFFFC56E)
+    "cyan" -> Color(0xFF7EE0E0)
+    "green" -> Color(0xFF9BE7A8)
+    "blue" -> Color(0xFF8EB4FF)
+    "pink" -> Color(0xFFFF9BB5)
+    else -> Color.White
+}
+
+fun sceneTitle(id: String): String = com.launch.tv.data.WallpaperStudio.title(id) ?: when (sceneId(id)) {
     "aurora" -> "Аврора"
     "ocean" -> "Океан"
     "sunset" -> "Закат"

@@ -66,6 +66,8 @@ class WeatherRepository(context: Context) {
             tempC = current.getString("temp_C").toDouble().roundToInt(),
             code = wwo(current.getString("weatherCode").toInt()),
             outlook = outlook(json),
+            windMps = (current.optString("windspeedKmph").toDoubleOrNull()?.div(3.6))?.roundToInt(),
+            pressureHpa = current.optString("pressure").toDoubleOrNull()?.roundToInt(),
         )
     }
 
@@ -76,21 +78,33 @@ class WeatherRepository(context: Context) {
             .getJSONArray("timeseries")
             .getJSONObject(0)
             .getJSONObject("data")
-        val temp = data.getJSONObject("instant").getJSONObject("details").getDouble("air_temperature")
+        val details = data.getJSONObject("instant").getJSONObject("details")
+        val temp = details.getDouble("air_temperature")
         val symbol = data.optJSONObject("next_1_hours")?.optJSONObject("summary")?.optString("symbol_code")
             ?: data.optJSONObject("next_6_hours")?.optJSONObject("summary")?.optString("symbol_code")
             ?: ""
-        return WeatherInfo(geo.city, temp.roundToInt(), symbolCode(symbol))
+        return WeatherInfo(
+            city = geo.city,
+            tempC = temp.roundToInt(),
+            code = symbolCode(symbol),
+            windMps = details.optDouble("wind_speed").takeIf { !it.isNaN() }?.roundToInt(),
+            pressureHpa = details.optDouble("air_pressure_at_sea_level").takeIf { !it.isNaN() }?.roundToInt(),
+        )
     }
 
     private fun openMeteo(geo: Geo): WeatherInfo {
         val url = "https://api.open-meteo.com/v1/forecast" +
-            "?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,weather_code"
+            "?latitude=${geo.lat}&longitude=${geo.lon}" +
+            "&current=temperature_2m,weather_code,wind_speed_10m,pressure_msl"
         val current = JSONObject(http(url, 3500)).getJSONObject("current")
+        val wind = current.optDouble("wind_speed_10m")
+        val pressure = current.optDouble("pressure_msl")
         return WeatherInfo(
             city = geo.city,
             tempC = current.getDouble("temperature_2m").roundToInt(),
             code = current.getInt("weather_code"),
+            windMps = wind.takeIf { !it.isNaN() }?.let { (it / 3.6).roundToInt() },
+            pressureHpa = pressure.takeIf { !it.isNaN() }?.roundToInt(),
         )
     }
 
@@ -169,7 +183,14 @@ class WeatherRepository(context: Context) {
         if (!file.exists()) return null
         return try {
             val json = JSONObject(file.readText())
-            val info = WeatherInfo(json.getString("city"), json.getInt("temp"), json.getInt("code"))
+            val info = WeatherInfo(
+                city = json.getString("city"),
+                tempC = json.getInt("temp"),
+                code = json.getInt("code"),
+                outlook = json.optString("outlook"),
+                windMps = json.optInt("wind", -1).takeIf { it >= 0 },
+                pressureHpa = json.optInt("pressure", -1).takeIf { it >= 0 },
+            )
             val geo = if (json.has("lat")) {
                 Geo(json.getDouble("lat"), json.getDouble("lon"), json.getString("city"))
             } else {
@@ -188,6 +209,9 @@ class WeatherRepository(context: Context) {
             .put("city", info.city.ifBlank { "Рядом" })
             .put("temp", info.tempC)
             .put("code", info.code)
+            .put("outlook", info.outlook)
+            .put("wind", info.windMps ?: -1)
+            .put("pressure", info.pressureHpa ?: -1)
             .put("place", place)
         file.writeText(json.toString())
     }

@@ -59,6 +59,7 @@ fun AboutScreen() {
         modifier = Modifier
             .fillMaxSize()
             .focusRequester(focus)
+            .pageLead("about")
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 val down = event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN

@@ -4,7 +4,7 @@ import java.util.Locale
 
 enum class Section { Home, Apps, Inputs, Search, Settings }
 
-enum class SettingsPage { Main, Favorites, Hidden, Categories, Weather, IconSize, AppControl, About, Display }
+enum class SettingsPage { Main, Favorites, Hidden, Categories, Weather, IconSize, AppControl, About, Display, Wallpaper, Time }
 
 enum class MoveTarget { Favorites, Recents, Global }
 
@@ -34,7 +34,7 @@ data class UserSettings(
     val wallpaperId: String = "ink",
     val wallpaperUri: String? = null,
     val iconDp: Int = 48,
-    val columns: Int = 5,
+    val columns: Int = 6,
     val motion: Motion = Motion.Expressive,
     val showClock: Boolean = true,
     val showDate: Boolean = true,
@@ -51,6 +51,7 @@ data class UserSettings(
     val showSeconds: Boolean = false,
     val clockSp: Int = 108,
     val showDock: Boolean = true,
+    val dockSlots: Int = 8,
     val dockLabels: String = "focus",
     val weatherInline: Boolean = false,
     val fahrenheit: Boolean = false,
@@ -59,6 +60,7 @@ data class UserSettings(
     val showHints: Boolean = true,
     val sortMode: String = "name",
     val showRecents: Boolean = true,
+    val showWatch: Boolean = true,
     val confirmDisable: Boolean = true,
     val lastInputId: String = "",
     val focusSound: Boolean = true,
@@ -66,6 +68,7 @@ data class UserSettings(
     val weatherPlaces: List<String> = emptyList(),
     val inputNames: Map<String, String> = emptyMap(),
     val favoriteInputs: List<String> = emptyList(),
+    val menuIconColor: String = "white",
 )
 
 data class WeatherInfo(
@@ -73,6 +76,22 @@ data class WeatherInfo(
     val tempC: Int,
     val code: Int,
     val outlook: String = "",
+    val windMps: Int? = null,
+    val pressureHpa: Int? = null,
+)
+
+fun weatherFacts(info: WeatherInfo): String {
+    val wind = info.windMps?.let { "Ветер $it м/с" }
+    val pressure = info.pressureHpa?.let { "${kotlin.math.round(it * 0.750062).toInt()} мм" }
+    return listOfNotNull(wind, pressure).joinToString(" · ")
+}
+
+data class WatchItem(
+    val title: String,
+    val poster: String?,
+    val intentUri: String?,
+    val packageName: String,
+    val launchKey: String? = null,
 )
 
 data class NetStatus(
@@ -85,6 +104,8 @@ data class TvSource(
     val label: String,
     val connected: Boolean,
     val status: String = if (connected) "Сигнал есть" else "Нет сигнала",
+    val plugged: Boolean = connected,
+    val kind: String = "hdmi",
 )
 data class CategoryRow(
     val title: String,
@@ -116,7 +137,27 @@ data class LaunchUiState(
     val categoryFilter: String = "Все",
     val homeRole: Boolean = false,
     val sources: List<TvSource> = emptyList(),
+    val watch: List<WatchItem> = emptyList(),
+    val recsAllowed: Boolean = false,
 )
+
+val MenuIconColors = listOf("white", "accent", "amber", "cyan", "green", "blue", "pink")
+
+fun menuIconTitle(id: String): String = when (id) {
+    "accent" -> "Как тема"
+    "amber" -> "Янтарный"
+    "cyan" -> "Бирюза"
+    "green" -> "Зелёный"
+    "blue" -> "Синий"
+    "pink" -> "Розовый"
+    else -> "Белый"
+}
+
+fun nextMenuIconColor(id: String, forward: Boolean): String {
+    val index = MenuIconColors.indexOf(id).let { if (it < 0) 0 else it }
+    val next = if (forward) (index + 1) % MenuIconColors.size else (index - 1 + MenuIconColors.size) % MenuIconColors.size
+    return MenuIconColors[next]
+}
 
 object Catalog {
     val builtin = listOf(

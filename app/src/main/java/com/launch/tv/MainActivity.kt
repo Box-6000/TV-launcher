@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.view.WindowCompat
@@ -18,13 +19,12 @@ class MainActivity : ComponentActivity() {
     private val viewModel: LaunchViewModel by viewModels()
     private var packageReceiver: BroadcastReceiver? = null
 
-    private val wallpaperPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@registerForActivityResult
-        try {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        } catch (_: SecurityException) {
-        }
-        viewModel.setWallpaperUri(uri.toString())
+    private val wallpaperPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) viewModel.importWallpaper(uri)
+    }
+
+    private val wallpaperFallback = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) viewModel.importWallpaper(uri)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,10 +52,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             com.launch.tv.ui.LaunchRoot(
                 viewModel = viewModel,
-                onPickImage = {
-                    runCatching { wallpaperPicker.launch(arrayOf("image/*")) }
-                        .onFailure { viewModel.toast("Нет приложения для выбора изображения") }
-                },
+                onPickImage = { openWallpaperPicker() },
             )
         }
     }
@@ -79,6 +76,21 @@ class MainActivity : ComponentActivity() {
         viewModel.refreshStatus()
         viewModel.refreshApps()
         viewModel.refreshSources()
+    }
+
+    private fun openWallpaperPicker() {
+        val request = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        if (ActivityResultContracts.PickVisualMedia.isPhotoPickerAvailable(this)) {
+            runCatching { wallpaperPicker.launch(request) }
+                .onFailure { openWallpaperFallback() }
+        } else {
+            openWallpaperFallback()
+        }
+    }
+
+    private fun openWallpaperFallback() {
+        runCatching { wallpaperFallback.launch("image/*") }
+            .onFailure { viewModel.toast("Нет приложения для выбора изображения") }
     }
 
     private fun openFromRemote() {

@@ -6,19 +6,20 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -31,20 +32,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.material3.Border
-import androidx.tv.material3.DrawerValue
-import androidx.tv.material3.NavigationDrawer
-import androidx.tv.material3.NavigationDrawerItem
-import androidx.tv.material3.NavigationDrawerItemDefaults
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
-import androidx.tv.material3.rememberDrawerState
 import com.launch.tv.LaunchViewModel
 import com.launch.tv.model.Catalog
 import com.launch.tv.model.LaunchUiState
@@ -60,6 +60,7 @@ import com.launch.tv.ui.theme.LaunchTheme
 import com.launch.tv.ui.theme.LocalChrome
 import com.launch.tv.ui.theme.LocalFocusSound
 import com.launch.tv.ui.theme.LocalPalette
+import com.launch.tv.ui.theme.menuIconColor
 import com.launch.tv.ui.theme.paletteById
 import kotlinx.coroutines.delay
 
@@ -73,10 +74,12 @@ fun LaunchRoot(viewModel: LaunchViewModel, onPickImage: () -> Unit) {
         124.dp,
         if (widthDp >= 1500) 280.dp else 210.dp,
     )
+    val cell = available / state.settings.columns
+    val fittedIcon = state.settings.iconDp.dp.coerceIn(32.dp, (cell - 28.dp).coerceAtLeast(32.dp))
     val chrome = Chrome(
         cardWidth = cardWidth,
         cardHeight = cardWidth * 0.98f,
-        icon = state.settings.iconDp.dp,
+        icon = fittedIcon,
         motion = state.settings.motion,
     )
     BackHandler(enabled = state.menuPackage == null) {
@@ -127,153 +130,130 @@ private fun Shell(state: LaunchUiState, viewModel: LaunchViewModel, onPickImage:
         Section.Home to ("Главная" to "home"),
         Section.Apps to ("Все" to "apps"),
         Section.Inputs to ("Входы" to "hdmi"),
-        Section.Search to ("Поиск" to "search"),
         Section.Settings to ("Настройки" to "settings"),
     )
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    val itemFocus = remember {
-        sections.associate { it.first to FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    var menuOpen by remember { mutableStateOf(false) }
+    var enterPage by remember { mutableStateOf(false) }
+    val voiceFocus = remember { FocusRequester() }
+    val menuLead = remember { FocusRequester() }
+    val dockFocus = remember { FocusRequester() }
+    val pageLead = remember(state.section, state.settingsPage) { PageLead() }
+    var holdMic by remember { mutableStateOf(false) }
+    val iconTint = menuIconColor(state.settings.menuIconColor, LocalPalette.current.accent)
+    val startPad by animateDpAsState(
+        targetValue = if (menuOpen) 260.dp else 104.dp,
+        animationSpec = tween(160),
+        label = "menuPad",
+    )
+    LaunchedEffect(pageLead) {
+        if (state.section != Section.Settings) return@LaunchedEffect
+        holdMic = true
+        delay(80)
+        runCatching { pageLead.requester.requestFocus() }
+        delay(400)
+        holdMic = false
     }
-    var drawerWasOpen by remember { mutableStateOf(false) }
-    LaunchedEffect(drawerState.currentValue) {
-        val open = drawerState.currentValue == DrawerValue.Open
-        if (open && !drawerWasOpen) {
-            val target = itemFocus[state.section] ?: itemFocus.getValue(Section.Home)
-            repeat(4) {
-                if (runCatching { target.requestFocus() }.isSuccess) return@repeat
-                delay(40)
-            }
+    BackHandler(enabled = state.section == Section.Home && menuOpen) {
+        runCatching { dockFocus.requestFocus() }
+    }
+    LaunchedEffect(enterPage, state.section) {
+        if (enterPage) {
+            delay(40)
+            focusManager.moveFocus(FocusDirection.Right)
+            enterPage = false
         }
-        drawerWasOpen = open
     }
-    val glass = Color(0xE61C1C22)
-    val glassSoft = Color(0xB31C1C22)
+    CompositionLocalProvider(LocalPageLead provides pageLead) {
     Box(Modifier.fillMaxSize()) {
         Wallpaper(state.settings)
-        NavigationDrawer(
-            modifier = Modifier.fillMaxSize(),
-            drawerState = drawerState,
-            drawerContent = {
-                val scope = this
-                val open = hasFocus
-                Column(
-                    Modifier
-                        .fillMaxHeight()
-                        .padding(horizontal = 8.dp, vertical = 18.dp),
-                ) {
-                    Row(
-                        Modifier.padding(start = 10.dp, bottom = 18.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Mark()
-                        if (open) {
-                            Spacer(Modifier.width(10.dp))
-                            Text("Launch", fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                        }
-                    }
-                    with(scope) {
-                        sections.forEach { (section, meta) ->
-                            NavigationDrawerItem(
-                                selected = state.section == section,
-                                onClick = { viewModel.section(section) },
-                                modifier = Modifier.focusRequester(itemFocus.getValue(section)),
-                                leadingContent = { DrawerGlyph(meta.second) },
-                                colors = NavigationDrawerItemDefaults.colors(
-                                    containerColor = Color.Transparent,
-                                    contentColor = Color.White,
-                                    inactiveContentColor = Color.White.copy(alpha = 0.92f),
-                                    focusedContainerColor = glass,
-                                    focusedContentColor = Color.White,
-                                    pressedContainerColor = glass,
-                                    pressedContentColor = Color.White,
-                                    selectedContainerColor = glassSoft,
-                                    selectedContentColor = Color.White,
-                                    focusedSelectedContainerColor = glass,
-                                    focusedSelectedContentColor = Color.White,
-                                    pressedSelectedContainerColor = glass,
-                                    pressedSelectedContentColor = Color.White,
-                                ),
-                                border = NavigationDrawerItemDefaults.border(
-                                    focusedBorder = Border(
-                                        border = BorderStroke(2.5.dp, Color.White),
-                                        shape = RoundedCornerShape(14.dp),
-                                    ),
-                                    focusedSelectedBorder = Border(
-                                        border = BorderStroke(2.5.dp, Color.White),
-                                        shape = RoundedCornerShape(14.dp),
-                                    ),
-                                ),
-                                scale = NavigationDrawerItemDefaults.scale(
-                                    focusedScale = LocalChrome.current.motion.scale,
-                                ),
-                            ) {
-                                Text(meta.first)
-                            }
-                        }
-                    }
-                }
-            },
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(start = startPad, end = 36.dp, top = 12.dp, bottom = 8.dp),
         ) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(start = 20.dp, end = 32.dp, top = 12.dp, bottom = 8.dp),
-            ) {
-                StatusBar(
-                    title = if (state.section == Section.Home) "" else screenTitle(state),
-                    settings = state.settings,
-                    weather = state.weather,
-                    net = state.net,
-                    battery = state.battery,
-                    compact = state.section == Section.Home,
-                )
-                Box(Modifier.fillMaxWidth().weight(1f)) {
-                    when (state.section) {
-                        Section.Home -> HomeScreen(
-                            favorites = feed.favorites,
-                            settings = state.settings,
-                            weather = state.weather,
-                            weatherLoading = state.weatherLoading,
-                            net = state.net,
-                            onOpen = { viewModel.openApp(it.packageName) },
-                            onMenu = { viewModel.openMenu(it.packageName) },
-                            onSection = viewModel::section,
-                            recents = feed.recents,
-                            onRetryWeather = viewModel::retryWeather,
-                        )
-                        Section.Apps -> AppsScreen(
-                            apps = visible,
-                            settings = state.settings,
-                            filter = state.categoryFilter,
-                            arrange = state.arrange,
-                            onFilter = viewModel::categoryFilter,
-                            onOpen = { viewModel.openApp(it.packageName) },
-                            onMenu = { viewModel.openMenu(it.packageName) },
-                            onMove = viewModel::move,
-                        )
-                        Section.Inputs -> InputsScreen(
-                            sources = state.sources,
-                            lastInputId = state.settings.lastInputId,
-                            names = state.settings.inputNames,
-                            favorites = state.settings.favoriteInputs,
-                            onOpen = viewModel::openSource,
-                            onRename = viewModel::renameInput,
-                            onToggleFavorite = viewModel::toggleFavoriteInput,
-                            onRefresh = viewModel::refreshSources,
-                        )
-                        Section.Search -> SearchScreen(
-                            query = state.query,
-                            apps = visible,
-                            settings = state.settings,
-                            onQuery = viewModel::query,
-                            onOpen = { viewModel.openApp(it.packageName) },
-                            onMenu = { viewModel.openMenu(it.packageName) },
-                        )
-                        Section.Settings -> SettingsScreen(state, viewModel, onPickImage)
-                    }
+            StatusBar(
+                title = if (state.section == Section.Home) "" else screenTitle(state),
+                settings = state.settings,
+                weather = state.weather,
+                net = state.net,
+                battery = state.battery,
+                sources = state.sources,
+                onOpenSource = viewModel::openSource,
+                compact = state.section == Section.Home,
+            )
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                when (state.section) {
+                    Section.Home -> HomeScreen(
+                        favorites = feed.favorites.take(state.settings.dockSlots),
+                        settings = state.settings,
+                        weather = state.weather,
+                        weatherLoading = state.weatherLoading,
+                        net = state.net,
+                        onOpen = { viewModel.openApp(it.packageName) },
+                        onMenu = { viewModel.openMenu(it.packageName) },
+                        onSection = viewModel::section,
+                        recents = feed.recents,
+                        watch = state.watch,
+                        onRetryWeather = viewModel::retryWeather,
+                        onOpenWatch = viewModel::openWatch,
+                        dockFocus = dockFocus,
+                    )
+                    Section.Apps -> AppsScreen(
+                        apps = visible,
+                        settings = state.settings,
+                        filter = state.categoryFilter,
+                        arrange = state.arrange,
+                        onFilter = viewModel::categoryFilter,
+                        onOpen = { viewModel.openApp(it.packageName) },
+                        onMenu = { viewModel.openMenu(it.packageName) },
+                        onMove = viewModel::move,
+                    )
+                    Section.Inputs -> InputsScreen(
+                        sources = state.sources,
+                        lastInputId = state.settings.lastInputId,
+                        favorites = state.settings.favoriteInputs,
+                        onOpen = viewModel::openSource,
+                        onToggleFavorite = viewModel::toggleFavoriteInput,
+                        onRefresh = viewModel::refreshSources,
+                    )
+                    Section.Search -> SearchScreen(
+                        query = state.query,
+                        apps = visible,
+                        settings = state.settings,
+                        onQuery = viewModel::query,
+                        onOpen = { viewModel.openApp(it.packageName) },
+                        onMenu = { viewModel.openMenu(it.packageName) },
+                    )
+                    Section.Settings -> SettingsScreen(state, viewModel, onPickImage)
                 }
             }
         }
+        VoiceButton(
+            onClick = viewModel::voiceSearch,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 18.dp, top = 14.dp)
+                .focusRequester(voiceFocus)
+                .onFocusChanged {
+                    if (it.isFocused && holdMic) runCatching { pageLead.requester.requestFocus() }
+                }
+                .focusProperties { down = menuLead },
+        )
+        SideMenu(
+            sections = sections,
+            current = state.section,
+            open = menuOpen,
+            iconTint = iconTint,
+            voiceFocus = voiceFocus,
+            menuLead = menuLead,
+            onOpenChange = { menuOpen = it },
+            onPick = { section ->
+                viewModel.section(section)
+                enterPage = true
+            },
+            modifier = Modifier.align(Alignment.CenterStart),
+        )
         state.toast?.let { ToastBanner(it) }
         val menuApp = state.apps.find { it.packageName == state.menuPackage }
         if (menuApp != null) {
@@ -296,6 +276,75 @@ private fun Shell(state: LaunchUiState, viewModel: LaunchViewModel, onPickImage:
             )
         }
     }
+    }
+}
+
+@Composable
+private fun SideMenu(
+    sections: List<Pair<Section, Pair<String, String>>>,
+    current: Section,
+    open: Boolean,
+    iconTint: Color,
+    voiceFocus: FocusRequester,
+    menuLead: FocusRequester,
+    onOpenChange: (Boolean) -> Unit,
+    onPick: (Section) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val requesters = remember(sections.size) { List(sections.size) { FocusRequester() } }
+    Column(
+        modifier
+            .width(if (open) 248.dp else 88.dp)
+            .fillMaxHeight()
+            .onFocusChanged { onOpenChange(it.hasFocus) }
+            .padding(start = 10.dp, end = 10.dp, top = 72.dp, bottom = 12.dp),
+    ) {
+        sections.forEachIndexed { index, (section, meta) ->
+            val shape = RoundedCornerShape(14.dp)
+            val requester = if (index == 0) menuLead else requesters[index]
+            Surface(
+                onClick = { onPick(section) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .height(52.dp)
+                    .focusRequester(requester)
+                    .focusProperties {
+                        up = if (index == 0) voiceFocus else if (index == 1) menuLead else requesters[index - 1]
+                        down = if (index == sections.lastIndex) FocusRequester.Cancel else requesters[index + 1]
+                    }
+                    .okPress({ onPick(section) }) {},
+                shape = ClickableSurfaceDefaults.shape(shape),
+                colors = ClickableSurfaceDefaults.colors(
+                    containerColor = if (section == current) Color.White.copy(alpha = 0.16f) else Color.Transparent,
+                    focusedContainerColor = Color.White.copy(alpha = 0.28f),
+                ),
+                border = ClickableSurfaceDefaults.border(
+                    focusedBorder = androidx.tv.material3.Border(
+                        border = androidx.compose.foundation.BorderStroke(2.dp, Color.White),
+                        shape = shape,
+                    ),
+                ),
+                scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
+            ) {
+                Row(
+                    Modifier.fillMaxSize().padding(horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    DrawerGlyph(meta.second, Modifier.size(28.dp), iconTint)
+                    if (open) {
+                        Text(
+                            meta.first,
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            maxLines = 1,
+                            modifier = Modifier.padding(start = 12.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 private fun screenTitle(state: LaunchUiState): String = when {
@@ -307,6 +356,8 @@ private fun screenTitle(state: LaunchUiState): String = when {
     state.section == Section.Settings && state.settingsPage == SettingsPage.AppControl -> "Приложения"
     state.section == Section.Settings && state.settingsPage == SettingsPage.About -> "О приложении"
     state.section == Section.Settings && state.settingsPage == SettingsPage.Display -> "Экран"
+    state.section == Section.Settings && state.settingsPage == SettingsPage.Wallpaper -> "Обои"
+    state.section == Section.Settings && state.settingsPage == SettingsPage.Time -> "Время и погода"
     state.section == Section.Home -> "Главная"
     state.section == Section.Apps -> "Все приложения"
     state.section == Section.Inputs -> "Входы"
