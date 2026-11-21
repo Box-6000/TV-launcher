@@ -12,8 +12,8 @@ android {
         applicationId = "com.launch.tv"
         minSdk = 23
         targetSdk = 35
-        versionCode = 14
-        versionName = "1.12.0"
+        versionCode = 36
+        versionName = "1.34.0"
     }
 
     buildTypes {

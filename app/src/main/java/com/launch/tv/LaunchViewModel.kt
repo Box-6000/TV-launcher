@@ -2,16 +2,27 @@ package com.launch.tv
 
 import android.app.Application
 import android.app.role.RoleManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.tv.TvInputManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.launch.tv.data.AppRepository
+import com.launch.tv.data.RecommendationHub
 import com.launch.tv.data.SettingsRepository
 import com.launch.tv.data.SystemStatus
+import com.launch.tv.data.VoiceSearch
+import com.launch.tv.data.WallpaperLoader
+import com.launch.tv.data.WallpaperStudio
 import com.launch.tv.data.WeatherRepository
 import com.launch.tv.model.Catalog
 import com.launch.tv.model.LaunchUiState
@@ -19,6 +30,7 @@ import com.launch.tv.model.Motion
 import com.launch.tv.model.MoveTarget
 import com.launch.tv.model.Section
 import com.launch.tv.model.UserSettings
+import com.launch.tv.model.nextMenuIconColor
 import com.launch.tv.model.SettingsPage
 import com.launch.tv.model.TvApp
 import com.launch.tv.model.swapAcross
@@ -41,6 +53,11 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
     private val weatherRepo = WeatherRepository(app)
     private val refreshMutex = Mutex()
     private var toastJob: Job? = null
+    private var inputCallback: TvInputManager.TvInputCallback? = null
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    private var rssiReceiver: BroadcastReceiver? = null
+    private var recsBound = false
+    private var programsAskedAt = 0L
 
     private val _state = kotlinx.coroutines.flow.MutableStateFlow(LaunchUiState())
     private fun edit(block: (LaunchUiState) -> LaunchUiState) {
@@ -62,17 +79,23 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
             edit { it.copy(weather = fresh ?: it.weather, weatherLoading = false) }
         }
         viewModelScope.launch {
-            val gate = async { delay(1700) }
+            val gate = async { delay(1600) }
             refreshApps()
             refreshStatus()
             refreshSources()
+            refreshWatch()
             gate.await()
             edit { it.copy(booting = false) }
         }
+        RecommendationHub.onChanged = { refreshWatch() }
+        watchInputs()
+        bindRecommendations()
         viewModelScope.launch {
             while (isActive) {
                 delay(20_000)
                 refreshStatus()
+                refreshSources()
+                refreshWatch()
             }
         }
         viewModelScope.launch {
@@ -82,6 +105,52 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
                 if (fresh != null) edit { it.copy(weather = fresh, weatherLoading = false) }
             }
         }
+        watchSignal()
+        refreshLive()
+    }
+
+    private fun refreshLive() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val current = settingsRepo.current()
+            if (!current.wallpaperId.startsWith("live:")) return@launch
+            val key = WallpaperStudio.liveKey(current.wallpaperId.removePrefix("live:"))
+            val item = WallpaperStudio.live.firstOrNull { it.id == key } ?: return@launch
+            val expected = runCatching { context.assets.openFd(item.asset).use { it.length } }.getOrNull()
+            val file = WallpaperLoader.motionFile(current.wallpaperUri)
+            if (expected != null && file != null && file.length() == expected && current.wallpaperId == "live:$key") return@launch
+            val saved = WallpaperStudio.installLive(context, key) ?: return@launch
+            settingsRepo.update { it.copy(wallpaperUri = saved, wallpaperId = "live:$key") }
+        }
+    }
+
+    private fun watchSignal() {
+        val context = getApplication<Application>()
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                refreshStatus()
+            }
+
+            override fun onLost(network: Network) {
+                refreshStatus()
+            }
+        }
+        runCatching { manager.registerDefaultNetworkCallback(callback) }
+        netCallback = callback
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                refreshStatus()
+            }
+        }
+        val filter = IntentFilter("android.net.wifi.RSSI_CHANGED")
+        if (Build.VERSION.SDK_INT >= 33) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            context.registerReceiver(receiver, filter)
+        }
+        rssiReceiver = receiver
     }
 
     fun refreshApps() {
@@ -95,10 +164,71 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
                 net = SystemStatus.net(context),
                 battery = SystemStatus.battery(context),
                 homeRole = isHome(context),
+                recsAllowed = RecommendationHub.allowed(context),
             )
+        }
+        bindRecommendations()
+    }
+
+    fun refreshWatch() {
+        val context = getApplication<Application>()
+        askForPrograms(context)
+        viewModelScope.launch {
+            val items = withContext(Dispatchers.IO) { com.launch.tv.data.WatchLibrary.load(context) }
+            edit { current ->
+                val allowed = RecommendationHub.allowed(context)
+                if (current.watch == items && current.recsAllowed == allowed) current
+                else current.copy(watch = items, recsAllowed = allowed)
+            }
         }
     }
 
+    fun openWatch(item: com.launch.tv.model.WatchItem) {
+        val context = getApplication<Application>()
+        if (RecommendationHub.send(item.launchKey)) return
+        try {
+            val parsed = item.intentUri?.takeIf { it.isNotBlank() }?.let { raw ->
+                if (raw.startsWith("http://") || raw.startsWith("https://")) {
+                    Intent(Intent.ACTION_VIEW, Uri.parse(raw))
+                } else {
+                    Intent.parseUri(raw, Intent.URI_INTENT_SCHEME)
+                }
+            }
+            val intent = parsed ?: context.packageManager.getLeanbackLaunchIntentForPackage(item.packageName)
+                ?: context.packageManager.getLaunchIntentForPackage(item.packageName)
+            if (intent == null) {
+                toast("Не удалось открыть")
+                return
+            }
+            if (item.packageName.isNotBlank() && intent.component == null && intent.`package` == null) {
+                intent.setPackage(item.packageName)
+            }
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: Exception) {
+            val fallback = context.packageManager.getLeanbackLaunchIntentForPackage(item.packageName)
+                ?: context.packageManager.getLaunchIntentForPackage(item.packageName)
+            if (fallback == null) {
+                toast("Не удалось открыть")
+            } else {
+                runCatching { context.startActivity(fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    .onFailure { toast("Не удалось открыть") }
+            }
+        }
+    }
+
+    fun voiceSearch() {
+        val message = VoiceSearch.open(getApplication())
+        if (message != null) toast(message)
+    }
+
+    fun cycleMenuIconColor(forward: Boolean) = toggle { it.copy(menuIconColor = nextMenuIconColor(it.menuIconColor, forward)) }
+
+    fun openRecommendationsAccess() {
+        val context = getApplication<Application>()
+        val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+            .onFailure { toast("Откройте доступ к уведомлениям в системе") }
+    }
     fun refreshSources() {
         val context = getApplication<Application>()
         viewModelScope.launch {
@@ -108,10 +238,6 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openSource(source: com.launch.tv.model.TvSource) {
-        if (!source.connected) {
-            toast("Нет сигнала")
-            return
-        }
         val context = getApplication<Application>()
         viewModelScope.launch {
             settingsRepo.update { it.copy(lastInputId = source.id) }
@@ -189,13 +315,21 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleFavorite(packageName: String) {
         viewModelScope.launch {
+            val current = settingsRepo.current()
+            if (packageName !in current.favorites && current.favorites.size >= 12) {
+                toast("В доке не больше 12 приложений")
+                return@launch
+            }
             settingsRepo.update { settings ->
-                val next = if (packageName in settings.favorites) {
-                    settings.favorites.filter { it != packageName }
+                if (packageName in settings.favorites) {
+                    settings.copy(favorites = settings.favorites.filter { it != packageName })
                 } else {
-                    settings.favorites + packageName
+                    val next = settings.favorites + packageName
+                    settings.copy(
+                        favorites = next,
+                        dockSlots = maxOf(settings.dockSlots, next.size).coerceIn(4, 12),
+                    )
                 }
-                settings.copy(favorites = next)
             }
         }
     }
@@ -285,6 +419,19 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun importWallpaper(uri: Uri) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val saved = withContext(Dispatchers.IO) { WallpaperLoader.import(context, uri) }
+            if (saved == null) {
+                toast("Не удалось прочитать файл")
+            } else {
+                settingsRepo.update { it.copy(wallpaperUri = saved, wallpaperId = "custom") }
+                toast("Свои обои установлены")
+            }
+        }
+    }
+
     fun setWallpaperUri(uri: String?) {
         viewModelScope.launch {
             settingsRepo.update { it.copy(wallpaperUri = uri) }
@@ -292,9 +439,49 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun useScene(id: String) {
+        viewModelScope.launch {
+            settingsRepo.update { it.copy(wallpaperId = id, wallpaperUri = null) }
+            toast("Обои установлены")
+        }
+    }
+
+    fun useStudio(category: String, index: Int) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            toast("Ставлю фото")
+            val saved = withContext(Dispatchers.IO) {
+                com.launch.tv.data.WallpaperStudio.install(context, category, index)
+            }
+            if (saved == null) {
+                toast("Не удалось поставить фото")
+                return@launch
+            }
+            settingsRepo.update { it.copy(wallpaperUri = saved, wallpaperId = "studio:$category:$index") }
+            toast("Обои установлены")
+        }
+    }
+
+    fun useLive(id: String) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            toast("Ставлю живые обои")
+            val key = WallpaperStudio.liveKey(id)
+            val saved = withContext(Dispatchers.IO) {
+                WallpaperStudio.installLive(context, key)
+            }
+            if (saved == null) {
+                toast("Не удалось поставить обои")
+                return@launch
+            }
+            settingsRepo.update { it.copy(wallpaperUri = saved, wallpaperId = "live:$key") }
+            toast("Живые обои установлены")
+        }
+    }
+
     fun changeIconSize(delta: Int) {
         viewModelScope.launch {
-            settingsRepo.update { it.copy(iconDp = (it.iconDp + delta).coerceIn(24, 180)) }
+            settingsRepo.update { it.copy(iconDp = (it.iconDp + delta).coerceIn(32, 120)) }
         }
     }
 
@@ -317,6 +504,7 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleSeconds() = toggle { it.copy(showSeconds = !it.showSeconds) }
     fun changeClockSize(delta: Int) = toggle { it.copy(clockSp = (it.clockSp + delta).coerceIn(72, 144)) }
     fun toggleDock() = toggle { it.copy(showDock = !it.showDock) }
+    fun changeDockSlots(delta: Int) = toggle { it.copy(dockSlots = (it.dockSlots + delta).coerceIn(4, 12)) }
     fun cycleDockLabels() = toggle {
         val next = when (it.dockLabels) {
             "always" -> "never"
@@ -339,6 +527,7 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
         it.copy(sortMode = next)
     }
     fun toggleRecents() = toggle { it.copy(showRecents = !it.showRecents) }
+    fun toggleWatch() = toggle { it.copy(showWatch = !it.showWatch) }
     fun toggleConfirmDisable() = toggle { it.copy(confirmDisable = !it.confirmDisable) }
     fun toggleFocusSound() = toggle { it.copy(focusSound = !it.focusSound, focusChosen = true) }
     fun rememberPlace(raw: String) {
@@ -607,6 +796,79 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
         ).filter { it in known }
         val rest = apps.filter { it.leanback && it.packageName !in preferred }.map { it.packageName }
         return (preferred + rest).distinct().take(8)
+    }
+
+    override fun onCleared() {
+        val context = getApplication<Application>()
+        val manager = context.getSystemService(Context.TV_INPUT_SERVICE) as? TvInputManager
+        inputCallback?.let { manager?.unregisterCallback(it) }
+        netCallback?.let { callback ->
+            val connected = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            runCatching { connected.unregisterNetworkCallback(callback) }
+        }
+        rssiReceiver?.let { runCatching { context.unregisterReceiver(it) } }
+        RecommendationHub.onChanged = null
+        super.onCleared()
+    }
+
+    private fun askForPrograms(context: Context) {
+        val now = System.currentTimeMillis()
+        if (now - programsAskedAt < 10 * 60 * 1000L) return
+        programsAskedAt = now
+        val packages = listOf(
+            "ru.kinopoisk.tv",
+            "gpm.tnt_premier",
+            "ru.ivi.client",
+            "ru.start.androidmobile",
+            "com.vk.tv",
+            "ru.rt.video.app.tv",
+            "mobi.zona",
+            "com.google.android.videos",
+            "com.amazon.amazonvideo.livingroom",
+            "com.netflix.ninja",
+            "com.google.android.youtube.tv",
+        )
+        for (pkg in packages) {
+            val intent = Intent("android.media.tv.action.INITIALIZE_PROGRAMS").setPackage(pkg)
+            runCatching { context.sendBroadcast(intent) }
+        }
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(8_000)
+            val items = withContext(Dispatchers.IO) { com.launch.tv.data.WatchLibrary.load(context) }
+            edit { current -> if (current.watch == items) current else current.copy(watch = items) }
+        }
+    }
+
+    private fun bindRecommendations() {
+        if (recsBound || Build.VERSION.SDK_INT < 24) return
+        val context = getApplication<Application>()
+        if (!RecommendationHub.allowed(context)) return
+        recsBound = true
+        runCatching {
+            android.service.notification.NotificationListenerService.requestRebind(
+                android.content.ComponentName(context, com.launch.tv.data.RecommendationListener::class.java),
+            )
+        }
+    }
+
+    private fun watchInputs() {
+        val context = getApplication<Application>()
+        val manager = context.getSystemService(Context.TV_INPUT_SERVICE) as? TvInputManager ?: return
+        val callback = object : TvInputManager.TvInputCallback() {
+            override fun onInputStateChanged(inputId: String, state: Int) {
+                refreshSources()
+            }
+
+            override fun onInputAdded(inputId: String) {
+                refreshSources()
+            }
+
+            override fun onInputRemoved(inputId: String) {
+                refreshSources()
+            }
+        }
+        inputCallback = callback
+        manager.registerCallback(callback, android.os.Handler(android.os.Looper.getMainLooper()))
     }
 
     private fun isHome(context: Context): Boolean {

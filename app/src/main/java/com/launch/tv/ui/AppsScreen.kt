@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,7 +34,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.FocusDirection
-import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
@@ -99,33 +99,36 @@ fun AppsScreen(
         if (sorted.isEmpty()) {
             Text("В этой категории пусто", color = palette.muted, fontSize = 18.sp)
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(settings.columns),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
-                contentPadding = PaddingValues(bottom = 28.dp),
-                modifier = Modifier.fillMaxSize().focusProperties {
-                    onExit = {
-                        if (requestedFocusDirection == FocusDirection.Left) cancelFocusChange()
-                    }
-                },
-            ) {
-                items(sorted, key = { it.packageName }) { app ->
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                        AppTile(
-                            app = app,
-                            favorite = app.packageName in favoriteIds,
-                            icon = LocalChrome.current.icon,
-                            modifier = Modifier
-                                .menuAction { onMenu(app) }
-                                .arrangeMove(
-                                    enabled = arrange,
-                                    onLeft = { onMove(MoveTarget.Global, ids, app.packageName, -1) },
-                                    onRight = { onMove(MoveTarget.Global, ids, app.packageName, 1) },
-                                ),
-                            onClick = { if (!arrange) onOpen(app) },
-                            onLongClick = { onMenu(app) },
-                        )
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val columns = 6
+                val cell = maxWidth / columns
+                val icon = (cell - 36.dp).coerceIn(40.dp, 64.dp)
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(columns),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(bottom = 20.dp),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    items(sorted, key = { it.packageName }) { app ->
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                            AppTile(
+                                app = app,
+                                favorite = app.packageName in favoriteIds,
+                                icon = icon,
+                                framed = true,
+                                labelWidth = cell - 6.dp,
+                                modifier = Modifier
+                                    .menuAction { onMenu(app) }
+                                    .arrangeMove(
+                                        enabled = arrange,
+                                        onLeft = { onMove(MoveTarget.Global, ids, app.packageName, -1) },
+                                        onRight = { onMove(MoveTarget.Global, ids, app.packageName, 1) },
+                                    ),
+                                onClick = { if (!arrange) onOpen(app) },
+                                onLongClick = { onMenu(app) },
+                            )
+                        }
                     }
                 }
             }
@@ -223,9 +226,16 @@ fun SearchField(value: String, onValue: (String) -> Unit, hint: String = "Наз
             .focusRequester(requester)
             .onFocusChanged { focused = it.isFocused }
             .onPreviewKeyEvent { event ->
-                val center = event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
-                    event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_ENTER
-                if (center && event.type == KeyEventType.KeyUp) {
+                val code = event.nativeKeyEvent.keyCode
+                val center = code == AndroidKeyEvent.KEYCODE_DPAD_CENTER || code == AndroidKeyEvent.KEYCODE_ENTER
+                val vertical = code == AndroidKeyEvent.KEYCODE_DPAD_DOWN || code == AndroidKeyEvent.KEYCODE_DPAD_UP
+                if (vertical && event.type == KeyEventType.KeyDown) {
+                    keyboard?.hide()
+                    focusManager.moveFocus(
+                        if (code == AndroidKeyEvent.KEYCODE_DPAD_DOWN) FocusDirection.Down else FocusDirection.Up,
+                    )
+                    true
+                } else if (center && event.type == KeyEventType.KeyUp) {
                     keyboard?.show()
                     true
                 } else {

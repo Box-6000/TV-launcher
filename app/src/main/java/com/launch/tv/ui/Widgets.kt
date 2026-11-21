@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -70,8 +71,10 @@ import com.launch.tv.model.Motion
 import com.launch.tv.model.NetKind
 import com.launch.tv.model.NetStatus
 import com.launch.tv.model.TvApp
+import com.launch.tv.model.TvSource
 import com.launch.tv.model.UserSettings
 import com.launch.tv.model.WeatherInfo
+import com.launch.tv.model.weatherFacts
 import com.launch.tv.model.weatherLabel
 import com.launch.tv.model.displayTemp
 import com.launch.tv.model.tempUnit
@@ -204,27 +207,35 @@ fun Modifier.stepKeys(onLeft: (() -> Unit)?, onRight: (() -> Unit)?): Modifier =
 fun Wallpaper(settings: UserSettings) {
     val context = LocalContext.current
     val palette = LocalPalette.current
+    val motion = WallpaperLoader.motionFile(settings.wallpaperUri)
     val photo by produceState<ImageBitmap?>(null, settings.wallpaperUri, settings.wallpaperId, settings.themeId) {
         value = withContext(Dispatchers.IO) {
+            if (motion != null) return@withContext null
             val custom = settings.wallpaperUri?.let { WallpaperLoader.load(context, it) }
             if (custom != null) return@withContext custom
             val id = settings.wallpaperId.ifBlank { settings.themeId }
             if (sceneId(id) == "gradient") null else WallpaperLoader.loadResource(context, wallpaperDrawable(id))
         }
     }
+    val dim = Brush.verticalGradient(
+        listOf(
+            Color.Black.copy(alpha = (settings.dimPercent / 180f).coerceIn(0.02f, 0.45f)),
+            Color.Black.copy(alpha = (settings.dimPercent / 420f).coerceIn(0f, 0.22f)),
+            Color.Black.copy(alpha = ((settings.dimPercent + 4) / 170f).coerceIn(0.04f, 0.5f)),
+        ),
+    )
+    if (motion != null) {
+        Box(Modifier.fillMaxSize()) {
+            MotionWallpaper(motion)
+            Box(Modifier.fillMaxSize().background(dim))
+        }
+        return
+    }
     Canvas(Modifier.fillMaxSize()) {
         val image = photo
         if (image != null) {
             drawCover(image)
-            drawRect(
-                brush = Brush.verticalGradient(
-                    listOf(
-                        Color.Black.copy(alpha = (settings.dimPercent / 180f).coerceIn(0.02f, 0.45f)),
-                        Color.Black.copy(alpha = (settings.dimPercent / 420f).coerceIn(0f, 0.22f)),
-                        Color.Black.copy(alpha = ((settings.dimPercent + 4) / 170f).coerceIn(0.04f, 0.5f)),
-                    ),
-                ),
-            )
+            drawRect(brush = dim)
         } else {
             drawPaletteGradient(palette)
         }
@@ -274,6 +285,8 @@ fun AppTile(
     favorite: Boolean,
     icon: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
+    framed: Boolean = false,
+    labelWidth: androidx.compose.ui.unit.Dp? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
@@ -281,6 +294,7 @@ fun AppTile(
     val shape = RoundedCornerShape(icon * 0.22f)
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    val hair = Color.White.copy(alpha = if (focused) 0.55f else 0.30f)
     val sound = LocalFocusSound.current
     LaunchedEffect(focused) {
         if (focused && sound) FocusTick.play()
@@ -297,8 +311,12 @@ fun AppTile(
             ),
             scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(focusedScale = 1f),
             border = androidx.tv.material3.ClickableSurfaceDefaults.border(
+                border = androidx.tv.material3.Border(
+                    border = BorderStroke(if (framed) 1.5.dp else 0.dp, if (framed) hair else Color.Transparent),
+                    shape = shape,
+                ),
                 focusedBorder = androidx.tv.material3.Border(
-                    border = BorderStroke(3.dp, Color.White),
+                    border = BorderStroke(if (framed) 1.5.dp else 2.dp, if (framed) hair else Color.White.copy(alpha = 0.7f)),
                     shape = shape,
                 ),
             ),
@@ -323,7 +341,7 @@ fun AppTile(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 8.dp).width(icon + 12.dp),
+            modifier = Modifier.padding(top = 8.dp).width(labelWidth ?: (icon + 12.dp)),
         )
     }
 }
@@ -399,11 +417,13 @@ fun StatusBar(
     weather: WeatherInfo?,
     net: NetStatus,
     battery: Int?,
+    sources: List<TvSource> = emptyList(),
+    onOpenSource: (TvSource) -> Unit = {},
     compact: Boolean = false,
 ) {
     val palette = LocalPalette.current
     Row(
-        Modifier.fillMaxWidth().height(if (compact) 36.dp else 72.dp),
+        Modifier.fillMaxWidth().height(if (compact) 48.dp else 72.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (!compact && title.isNotEmpty()) {
@@ -419,20 +439,126 @@ fun StatusBar(
             WeatherBadge(weather, settings.fahrenheit)
             Spacer(Modifier.width(18.dp))
         }
-        NetBadge(net)
         if (battery != null) {
-            Spacer(Modifier.width(14.dp))
             Text("$battery%", color = palette.muted, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.width(14.dp))
         }
         if (!compact && settings.showClock) {
-            Spacer(Modifier.width(18.dp))
             Text(
                 text = rememberClock(settings.clock24, settings.showSeconds),
                 color = palette.text,
                 fontSize = 34.sp,
                 fontWeight = FontWeight.Bold,
             )
+            Spacer(Modifier.width(16.dp))
         }
+        InputPills(sources, onOpenSource)
+        Spacer(Modifier.width(12.dp))
+        NetBadge(net)
+    }
+}
+
+@Composable
+private fun InputPills(
+    sources: List<TvSource>,
+    onOpen: (TvSource) -> Unit,
+) {
+    val live = sources.filter { it.connected && it.kind != "tuner" }.take(6)
+    if (live.isEmpty()) return
+    Row(
+        modifier = Modifier.padding(start = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        live.forEach { source ->
+            val shape = RoundedCornerShape(10.dp)
+            Surface(
+                onClick = {},
+                modifier = Modifier.width(46.dp).height(38.dp).okPress({ onOpen(source) }) {},
+                shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(shape),
+                colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
+                    containerColor = Color(0x9912161E),
+                    focusedContainerColor = Color(0xE02A3348),
+                ),
+                border = androidx.tv.material3.ClickableSurfaceDefaults.border(
+                    focusedBorder = androidx.tv.material3.Border(
+                        border = BorderStroke(1.5.dp, Color.White),
+                        shape = shape,
+                    ),
+                ),
+            ) {
+                Column(
+                    Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    DrawerGlyph(source.kind, Modifier.size(13.dp), Color.White)
+                    Text(
+                        shortInput(source.label),
+                        color = Color.White.copy(alpha = 0.82f),
+                        fontSize = 8.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 1.dp, start = 2.dp, end = 2.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun VoiceButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(percent = 50)
+    Surface(
+        onClick = {},
+        modifier = modifier.size(44.dp).okPress(onClick) {},
+        shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(shape),
+        colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
+            containerColor = Color.White.copy(alpha = 0.08f),
+            focusedContainerColor = Color.White.copy(alpha = 0.16f),
+        ),
+        border = androidx.tv.material3.ClickableSurfaceDefaults.border(
+            border = androidx.tv.material3.Border(
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.22f)),
+                shape = shape,
+            ),
+            focusedBorder = androidx.tv.material3.Border(
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.7f)),
+                shape = shape,
+            ),
+        ),
+        scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(focusedScale = 1f),
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            MicGlyph(Modifier.size(22.dp))
+        }
+    }
+}
+
+@Composable
+private fun MicGlyph(modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val color = Color.White
+        val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(size.width * 0.32f, size.height * 0.08f),
+            size = androidx.compose.ui.geometry.Size(size.width * 0.36f, size.height * 0.48f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.18f, size.width * 0.18f),
+            style = stroke,
+        )
+        drawArc(
+            color = color,
+            startAngle = 20f,
+            sweepAngle = 140f,
+            useCenter = false,
+            topLeft = Offset(size.width * 0.16f, size.height * 0.28f),
+            size = androidx.compose.ui.geometry.Size(size.width * 0.68f, size.height * 0.46f),
+            style = stroke,
+        )
+        drawLine(color, Offset(size.width * 0.5f, size.height * 0.74f), Offset(size.width * 0.5f, size.height * 0.88f), stroke.width, StrokeCap.Round)
+        drawLine(color, Offset(size.width * 0.32f, size.height * 0.9f), Offset(size.width * 0.68f, size.height * 0.9f), stroke.width, StrokeCap.Round)
     }
 }
 
@@ -484,6 +610,10 @@ private fun WeatherBadge(weather: WeatherInfo, fahrenheit: Boolean) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            val facts = weatherFacts(weather)
+            if (facts.isNotBlank()) {
+                Text(facts, color = palette.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }
@@ -507,37 +637,66 @@ internal fun WeatherGlyph(code: Int, color: Color) {
 @Composable
 private fun NetBadge(net: NetStatus) {
     val palette = LocalPalette.current
-    val active = if (net.kind == NetKind.Offline) palette.muted.copy(alpha = 0.35f) else palette.text
+    val active = if (net.kind == NetKind.Offline) palette.muted.copy(alpha = 0.4f) else palette.text
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Canvas(Modifier.size(22.dp)) {
-            if (net.kind == NetKind.Ethernet) {
-                drawCircle(active, radius = size.minDimension * 0.16f)
-                drawCircle(active, radius = size.minDimension * 0.38f, style = Stroke(2.dp.toPx()))
-            } else {
-                val bars = if (net.kind == NetKind.Offline) 0 else (net.level + 1).coerceIn(1, 4)
-                repeat(4) { index ->
-                    val h = size.height * (0.35f + index * 0.18f)
-                    drawLine(
-                        color = if (index < bars) active else active.copy(alpha = 0.25f),
-                        start = Offset(size.width * (0.18f + index * 0.2f), size.height),
-                        end = Offset(size.width * (0.18f + index * 0.2f), size.height - h),
-                        strokeWidth = 2.5.dp.toPx(),
-                        cap = StrokeCap.Round,
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.width(6.dp))
         Text(
             text = when (net.kind) {
                 NetKind.Offline -> "Нет сети"
-                NetKind.Wifi -> "Wi-Fi"
-                NetKind.Ethernet -> "Сеть"
+                NetKind.Wifi -> "Wi‑Fi"
+                NetKind.Ethernet -> "Кабель"
             },
             color = palette.muted,
             fontSize = 13.sp,
         )
+        Spacer(Modifier.width(16.dp))
+        Canvas(Modifier.size(22.dp)) {
+            when (net.kind) {
+                NetKind.Ethernet -> {
+                    val plug = androidx.compose.ui.geometry.Rect(
+                        size.width * 0.18f,
+                        size.height * 0.34f,
+                        size.width * 0.62f,
+                        size.height * 0.78f,
+                    )
+                    drawRoundRect(
+                        color = active,
+                        topLeft = plug.topLeft,
+                        size = plug.size,
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx(), 2.dp.toPx()),
+                        style = Stroke(1.7.dp.toPx()),
+                    )
+                    drawLine(active, Offset(size.width * 0.62f, size.height * 0.56f), Offset(size.width * 0.88f, size.height * 0.56f), 1.7.dp.toPx(), StrokeCap.Round)
+                    drawLine(active, Offset(size.width * 0.32f, size.height * 0.34f), Offset(size.width * 0.32f, size.height * 0.18f), 1.7.dp.toPx(), StrokeCap.Round)
+                    drawLine(active, Offset(size.width * 0.48f, size.height * 0.34f), Offset(size.width * 0.48f, size.height * 0.18f), 1.7.dp.toPx(), StrokeCap.Round)
+                }
+                else -> {
+                    val bars = if (net.kind == NetKind.Offline) 0 else (net.level + 1).coerceIn(1, 4)
+                    val paint = if (net.kind == NetKind.Wifi && net.level <= 0) Color(0xFFFFC56A) else active
+                    val origin = Offset(size.width * 0.16f, size.height * 0.80f)
+                    drawCircle(if (bars > 0) paint else paint.copy(alpha = 0.22f), 1.6.dp.toPx(), origin)
+                    repeat(4) { index ->
+                        val radius = size.minDimension * (0.22f + index * 0.18f)
+                        drawArc(
+                            color = if (index < bars) paint else paint.copy(alpha = 0.2f),
+                            startAngle = 225f,
+                            sweepAngle = 90f,
+                            useCenter = false,
+                            topLeft = Offset(origin.x - radius, origin.y - radius),
+                            size = androidx.compose.ui.geometry.Size(radius * 2, radius * 2),
+                            style = Stroke(1.8.dp.toPx(), cap = StrokeCap.Round),
+                        )
+                    }
+                }
+            }
+        }
     }
+}
+
+private fun shortInput(label: String): String {
+    val trimmed = label.trim()
+    val hdmi = Regex("(?i)hdmi\\s*(\\d+)").find(trimmed)
+    if (hdmi != null) return "HDMI ${hdmi.groupValues[1]}"
+    return trimmed.take(8)
 }
 
 @Composable
@@ -559,10 +718,10 @@ fun Mark(modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun DrawerGlyph(kind: String, modifier: Modifier = Modifier) {
+fun DrawerGlyph(kind: String, modifier: Modifier = Modifier, tint: Color? = null) {
     val palette = LocalPalette.current
+    val color = tint ?: palette.text
     Canvas(modifier.fillMaxSize()) {
-        val color = palette.text
         val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
         when (kind) {
             "home" -> {
@@ -587,6 +746,11 @@ fun DrawerGlyph(kind: String, modifier: Modifier = Modifier) {
             "search" -> {
                 drawCircle(color, radius = size.minDimension * 0.24f, center = Offset(size.width * 0.42f, size.height * 0.42f), style = stroke)
                 drawLine(color, Offset(size.width * 0.6f, size.height * 0.6f), Offset(size.width * 0.8f, size.height * 0.8f), stroke.width, StrokeCap.Round)
+            }
+            "av" -> {
+                drawCircle(color, radius = size.minDimension * 0.22f, center = Offset(size.width * 0.38f, size.height * 0.42f), style = stroke)
+                drawLine(color, Offset(size.width * 0.58f, size.height * 0.42f), Offset(size.width * 0.82f, size.height * 0.42f), stroke.width, StrokeCap.Round)
+                drawLine(color, Offset(size.width * 0.7f, size.height * 0.28f), Offset(size.width * 0.7f, size.height * 0.56f), stroke.width, StrokeCap.Round)
             }
             "hdmi" -> {
                 drawRoundRect(
@@ -670,7 +834,7 @@ fun AppMenu(
                 .padding(18.dp)
                 .focusGroup(),
         ) {
-            Text(app.label, color = palette.text, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(app.label, color = palette.text, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text("Удерживайте OK или нажмите Menu", color = palette.muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp))
             actions.forEachIndexed { index, (label, action) ->
                 MenuButton(
@@ -713,17 +877,18 @@ private fun MenuButton(
             focusedContentColor = Color.White,
         ),
         border = androidx.tv.material3.ClickableSurfaceDefaults.border(
-            focusedBorder = Border(BorderStroke(2.5.dp, Color.White), shape = shape),
+            border = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)), shape = shape),
+            focusedBorder = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.32f)), shape = shape),
         ),
-        scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(
-            focusedScale = if (LocalChrome.current.motion == Motion.Off) 1f else 1.03f,
-        ),
+        scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(focusedScale = 1f),
     ) {
         Text(
             text = label,
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             fontSize = 16.sp,
             fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -790,6 +955,24 @@ fun Modifier.iconFocusLift(focused: Boolean): Modifier {
     }
 }
 
+class PageLead {
+    val requester = FocusRequester()
+    private var owner: String? = null
+
+    fun attach(key: String): Modifier {
+        if (owner == null) owner = key
+        return if (owner == key) Modifier.focusRequester(requester) else Modifier
+    }
+}
+
+val LocalPageLead = androidx.compose.runtime.staticCompositionLocalOf<PageLead?> { null }
+
+@Composable
+fun Modifier.pageLead(key: String): Modifier {
+    val lead = LocalPageLead.current ?: return this
+    return this.then(lead.attach(key))
+}
+
 @Composable
 fun GlassListItem(
     title: String,
@@ -807,11 +990,15 @@ fun GlassListItem(
     LaunchedEffect(focused) {
         if (focused && sound) FocusTick.play()
     }
-    val plate = if (focused || selected) Color(0xF01C1C22) else Color(0xC4141418)
+    val plate = when {
+        focused -> Color(0xFF31405C)
+        selected -> Color(0xFF28344A)
+        else -> Color(0xFF1E2838)
+    }
     Surface(
         selected = selected,
         onClick = onClick,
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().pageLead(title).okPress(onClick) {},
         interactionSource = interaction,
         shape = SelectableSurfaceDefaults.shape(shape = shape),
         colors = SelectableSurfaceDefaults.colors(
@@ -830,12 +1017,12 @@ fun GlassListItem(
         ),
         scale = SelectableSurfaceDefaults.scale(focusedScale = 1f, pressedScale = 1f, focusedSelectedScale = 1f),
         border = SelectableSurfaceDefaults.border(
-            border = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.22f)), shape = shape),
-            focusedBorder = Border(BorderStroke(1.5.dp, Color.White.copy(alpha = 0.92f)), shape = shape),
-            pressedBorder = Border(BorderStroke(1.5.dp, Color.White.copy(alpha = 0.92f)), shape = shape),
-            selectedBorder = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.40f)), shape = shape),
-            focusedSelectedBorder = Border(BorderStroke(1.5.dp, Color.White.copy(alpha = 0.92f)), shape = shape),
-            pressedSelectedBorder = Border(BorderStroke(1.5.dp, Color.White.copy(alpha = 0.92f)), shape = shape),
+            border = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.10f)), shape = shape),
+            focusedBorder = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)), shape = shape),
+            pressedBorder = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)), shape = shape),
+            selectedBorder = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)), shape = shape),
+            focusedSelectedBorder = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)), shape = shape),
+            pressedSelectedBorder = Border(BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)), shape = shape),
         ),
     ) {
         Box(
@@ -843,16 +1030,7 @@ fun GlassListItem(
                 .fillMaxWidth()
                 .clip(shape)
                 .background(plate)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color.White.copy(alpha = if (focused) 0.30f else 0.16f),
-                            Color.White.copy(alpha = 0.05f),
-                            Color.Transparent,
-                        ),
-                    ),
-                )
-                .padding(horizontal = 18.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (leading != null) {
@@ -863,7 +1041,7 @@ fun GlassListItem(
                     Text(
                         title,
                         color = Color.White,
-                        fontSize = 18.sp,
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -912,32 +1090,63 @@ fun ToastBanner(text: String) {
 @Composable
 fun Splash() {
     val palette = LocalPalette.current
-    val alpha = remember { androidx.compose.animation.core.Animatable(0f) }
-    val scale = remember { androidx.compose.animation.core.Animatable(0.82f) }
+    val play = remember { androidx.compose.animation.core.Animatable(0f) }
     LaunchedEffect(Unit) {
         FocusTick.playOpen()
-        alpha.animateTo(1f, androidx.compose.animation.core.tween(640))
+        play.animateTo(1f, androidx.compose.animation.core.tween(1100))
     }
-    LaunchedEffect(Unit) {
-        scale.animateTo(
-            1f,
-            androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 280f),
-        )
-    }
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)), contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.graphicsLayer {
-                this.alpha = alpha.value
-                scaleX = scale.value
-                scaleY = scale.value
-            },
-        ) {
-            Mark(Modifier.size(92.dp))
+    val t = play.value
+    val titleAlpha = ((t - 0.35f) / 0.4f).coerceIn(0f, 1f)
+    val markScale = 0.92f + 0.08f * t
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.38f)), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(Modifier.size(108.dp), contentAlignment = Alignment.Center) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val inset = 3.dp.toPx()
+                    val arc = androidx.compose.ui.geometry.Size(size.width - inset * 2, size.height - inset * 2)
+                    val topLeft = androidx.compose.ui.geometry.Offset(inset, inset)
+                    drawArc(
+                        color = Color.White.copy(alpha = 0.18f),
+                        startAngle = 0f,
+                        sweepAngle = 360f,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arc,
+                        style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                    drawArc(
+                        color = palette.accent,
+                        startAngle = -90f,
+                        sweepAngle = 360f * t,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arc,
+                        style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                }
+                Mark(
+                    Modifier
+                        .size(58.dp)
+                        .graphicsLayer {
+                            scaleX = markScale
+                            scaleY = markScale
+                            alpha = (0.35f + 0.65f * t).coerceIn(0f, 1f)
+                        },
+                )
+            }
             Spacer(Modifier.height(18.dp))
-            Text("Launch", color = palette.text, fontSize = 48.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Text("Экран телевизора", color = palette.muted, fontSize = 18.sp)
+            Text(
+                "Launch",
+                color = palette.text.copy(alpha = titleAlpha),
+                fontSize = 40.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Экран телевизора",
+                color = palette.muted.copy(alpha = titleAlpha),
+                fontSize = 16.sp,
+            )
         }
     }
 }

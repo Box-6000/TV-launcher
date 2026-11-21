@@ -46,7 +46,7 @@ class SettingsRepository(context: Context) {
             wallpaperId = this[Keys.wallpaper] ?: "ink",
             wallpaperUri = this[Keys.wallpaperUri],
             iconDp = iconDp(this),
-            columns = (this[Keys.columns] ?: 5).coerceIn(4, 8),
+            columns = (this[Keys.columns] ?: 6).let { if (it < 6) 6 else it }.coerceIn(4, 8),
             motion = enumOr(this[Keys.motion], Motion.Expressive),
             showClock = this[Keys.clock] ?: true,
             showDate = this[Keys.date] ?: true,
@@ -63,6 +63,7 @@ class SettingsRepository(context: Context) {
             showSeconds = this[Keys.seconds] ?: false,
             clockSp = (this[Keys.clockSp] ?: 108).coerceIn(72, 144),
             showDock = this[Keys.dock] ?: true,
+            dockSlots = (this[Keys.dockSlots] ?: 8).coerceIn(4, 12),
             dockLabels = this[Keys.dockLabels] ?: "focus",
             weatherInline = this[Keys.weatherInline] ?: false,
             fahrenheit = this[Keys.fahrenheit] ?: false,
@@ -71,6 +72,7 @@ class SettingsRepository(context: Context) {
             showHints = this[Keys.hints] ?: true,
             sortMode = this[Keys.sortMode] ?: "name",
             showRecents = this[Keys.showRecents] ?: true,
+            showWatch = this[Keys.showWatch] ?: true,
             confirmDisable = this[Keys.confirmDisable] ?: true,
             lastInputId = this[Keys.lastInput].orEmpty(),
             focusSound = if (this[Keys.focusChosen] == true) this[Keys.focusSound] ?: true else true,
@@ -78,6 +80,7 @@ class SettingsRepository(context: Context) {
             weatherPlaces = strings(this[Keys.places]),
             inputNames = objects(this[Keys.inputNames]),
             favoriteInputs = strings(this[Keys.favoriteInputs]),
+            menuIconColor = this[Keys.menuIconColor] ?: "white",
         )
     }
 
@@ -85,7 +88,7 @@ class SettingsRepository(context: Context) {
         this[Keys.theme] = settings.themeId
         this[Keys.wallpaper] = settings.wallpaperId
         if (settings.wallpaperUri == null) remove(Keys.wallpaperUri) else this[Keys.wallpaperUri] = settings.wallpaperUri
-        this[Keys.iconDp] = settings.iconDp.coerceIn(24, 180)
+        this[Keys.iconDp] = settings.iconDp.coerceIn(32, 120)
         this[Keys.columns] = settings.columns
         this[Keys.motion] = settings.motion.name
         this[Keys.clock] = settings.showClock
@@ -103,12 +106,14 @@ class SettingsRepository(context: Context) {
         this[Keys.seconds] = settings.showSeconds
         this[Keys.clockSp] = settings.clockSp.coerceIn(72, 144)
         this[Keys.dock] = settings.showDock
+        this[Keys.dockSlots] = settings.dockSlots.coerceIn(4, 12)
         this[Keys.dockLabels] = settings.dockLabels
         this[Keys.weatherInline] = settings.weatherInline
         this[Keys.fahrenheit] = settings.fahrenheit
         this[Keys.dim] = settings.dimPercent.coerceIn(0, 70)
         this[Keys.clockPlate] = settings.clockPlate
         this[Keys.showRecents] = settings.showRecents
+        this[Keys.showWatch] = settings.showWatch
         this[Keys.hints] = settings.showHints
         this[Keys.sortMode] = settings.sortMode
         this[Keys.confirmDisable] = settings.confirmDisable
@@ -118,6 +123,7 @@ class SettingsRepository(context: Context) {
         this[Keys.places] = JSONArray(settings.weatherPlaces).toString()
         this[Keys.inputNames] = JSONObject(settings.inputNames).toString()
         this[Keys.favoriteInputs] = JSONArray(settings.favoriteInputs).toString()
+        this[Keys.menuIconColor] = settings.menuIconColor
     }
 
     private fun strings(raw: String?): List<String> {
@@ -147,7 +153,7 @@ class SettingsRepository(context: Context) {
     }
 
     private fun iconDp(prefs: Preferences): Int {
-        prefs[Keys.iconDp]?.let { return it.coerceIn(24, 180) }
+        prefs[Keys.iconDp]?.let { return it.coerceIn(32, 120) }
         return when (prefs[Keys.iconSize]) {
             "Small" -> 40
             "Large" -> 72
@@ -183,6 +189,7 @@ class SettingsRepository(context: Context) {
         val seconds = booleanPreferencesKey("clock_seconds")
         val clockSp = intPreferencesKey("clock_sp")
         val dock = booleanPreferencesKey("dock")
+        val dockSlots = intPreferencesKey("dock_slots")
         val dockLabels = stringPreferencesKey("dock_labels")
         val weatherInline = booleanPreferencesKey("weather_inline")
         val fahrenheit = booleanPreferencesKey("fahrenheit")
@@ -191,6 +198,7 @@ class SettingsRepository(context: Context) {
         val hints = booleanPreferencesKey("hints")
         val sortMode = stringPreferencesKey("sort_mode")
         val showRecents = booleanPreferencesKey("show_recents")
+        val showWatch = booleanPreferencesKey("show_watch")
         val confirmDisable = booleanPreferencesKey("confirm_disable")
         val lastInput = stringPreferencesKey("last_input")
         val focusSound = booleanPreferencesKey("focus_sound")
@@ -198,5 +206,6 @@ class SettingsRepository(context: Context) {
         val places = stringPreferencesKey("weather_places")
         val inputNames = stringPreferencesKey("input_names")
         val favoriteInputs = stringPreferencesKey("favorite_inputs")
+        val menuIconColor = stringPreferencesKey("menu_icon_color")
     }
 }

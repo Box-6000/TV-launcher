@@ -19,12 +19,12 @@ class MainActivity : ComponentActivity() {
     private var packageReceiver: BroadcastReceiver? = null
 
     private val wallpaperPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@registerForActivityResult
-        try {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        } catch (_: SecurityException) {
+        if (uri != null) {
+            runCatching {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            viewModel.importWallpaper(uri)
         }
-        viewModel.setWallpaperUri(uri.toString())
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,10 +52,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             com.launch.tv.ui.LaunchRoot(
                 viewModel = viewModel,
-                onPickImage = {
-                    runCatching { wallpaperPicker.launch(arrayOf("image/*")) }
-                        .onFailure { viewModel.toast("Нет приложения для выбора изображения") }
-                },
+                onPickImage = { openWallpaperPicker() },
             )
         }
     }
@@ -79,6 +76,11 @@ class MainActivity : ComponentActivity() {
         viewModel.refreshStatus()
         viewModel.refreshApps()
         viewModel.refreshSources()
+    }
+
+    private fun openWallpaperPicker() {
+        runCatching { wallpaperPicker.launch(arrayOf("image/*", "video/*")) }
+            .onFailure { viewModel.toast("Нет приложения для выбора файла") }
     }
 
     private fun openFromRemote() {

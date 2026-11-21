@@ -18,7 +18,7 @@ object SystemStatus {
             val online = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
             if (!online) return NetStatus(NetKind.Offline, 0)
             if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
-                val level = wifiLevel(context)
+                val level = wifiLevel(context, capabilities)
                 NetStatus(NetKind.Wifi, level)
             } else {
                 NetStatus(NetKind.Ethernet, 3)
@@ -42,15 +42,47 @@ object SystemStatus {
         }
     }
 
-    private fun wifiLevel(context: Context): Int {
+    private fun wifiLevel(context: Context, capabilities: NetworkCapabilities?): Int {
+        val fromCaps = capabilities?.let { caps ->
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                val reported = caps.signalStrength
+                if (reported in 0..4) {
+                    when (reported) {
+                        0, 1 -> 0
+                        2 -> 1
+                        3 -> 2
+                        else -> 3
+                    }
+                } else {
+                    null
+                }
+            } else {
+                null
+            }
+        }
+        val fromRssi = rssiLevel(context)
+        return when {
+            fromCaps != null && fromRssi != null -> minOf(fromCaps, fromRssi)
+            fromCaps != null -> fromCaps
+            fromRssi != null -> fromRssi
+            else -> 1
+        }
+    }
+
+    private fun rssiLevel(context: Context): Int? {
         return try {
             val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
             @Suppress("DEPRECATION")
-            val rssi = wifi.connectionInfo?.rssi ?: return 2
-            @Suppress("DEPRECATION")
-            WifiManager.calculateSignalLevel(rssi, 4).coerceIn(0, 3)
+            val rssi = wifi.connectionInfo?.rssi ?: return null
+            if (rssi >= 0 || rssi < -100) return null
+            when {
+                rssi >= -60 -> 3
+                rssi >= -70 -> 2
+                rssi >= -80 -> 1
+                else -> 0
+            }
         } catch (_: Exception) {
-            2
+            null
         }
     }
 }

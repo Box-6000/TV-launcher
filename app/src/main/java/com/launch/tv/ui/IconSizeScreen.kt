@@ -3,6 +3,7 @@ package com.launch.tv.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -16,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -35,14 +37,18 @@ fun IconSizeScreen(state: LaunchUiState, viewModel: LaunchViewModel) {
         delay(80)
         runCatching { focus.requestFocus() }
     }
+    val width = LocalConfiguration.current.screenWidthDp.dp
+    val cell = (width - 150.dp) / state.settings.columns
+    val fitted = size.dp.coerceIn(32.dp, (cell - 28.dp).coerceAtLeast(32.dp))
     Column(Modifier.fillMaxSize()) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier.fillMaxWidth().weight(1f),
             contentAlignment = Alignment.Center,
         ) {
+            val preview = fitted.coerceAtMost(minOf(maxWidth, maxHeight) - 48.dp).coerceAtLeast(32.dp)
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 if (sample != null) {
-                    AppIcon(sample.packageName, size.dp)
+                    AppIcon(sample.packageName, preview)
                     Text(
                         sample.label,
                         color = palette.muted,
@@ -54,7 +60,7 @@ fun IconSizeScreen(state: LaunchUiState, viewModel: LaunchViewModel) {
         }
         GlassListItem(
             title = "Размер иконки",
-            supporting = "Влево меньше, вправо больше. Сверху показан настоящий размер.",
+            supporting = "Влево меньше, вправо больше. Значок остаётся внутри ряда и дока.",
             value = "$size",
             onClick = { viewModel.changeIconSize(4) },
             modifier = Modifier
