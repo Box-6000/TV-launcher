@@ -24,6 +24,26 @@ object WallpaperStudio {
     )
     const val COUNT = 10
 
+    data class LiveWallpaper(val id: String, val title: String, val asset: String, val thumb: String)
+
+    val live = listOf(
+        LiveWallpaper("grove", "Лес", "walls/live/grove.mp4", "forest"),
+        LiveWallpaper("lake", "Рассвет", "walls/live/lake.mp4", "dawn"),
+    )
+
+    fun liveKey(raw: String): String = when (raw) {
+        "mist", "grove" -> "grove"
+        "stars", "lake" -> "lake"
+        else -> raw
+    }
+
+    fun liveTitle(id: String): String? {
+        if (!id.startsWith("live:")) return null
+        val key = liveKey(id.removePrefix("live:"))
+        val name = live.firstOrNull { it.id == key }?.title ?: return null
+        return "Живые · $name"
+    }
+
     fun title(id: String): String? {
         if (!id.startsWith("studio:")) return null
         val parts = id.split(":")
@@ -41,14 +61,23 @@ object WallpaperStudio {
     }
 
     fun install(context: Context, category: String, index: Int): String? {
+        return copyAsset(context, assetName(category, index), "jpg")
+    }
+
+    fun installLive(context: Context, id: String): String? {
+        val item = live.firstOrNull { it.id == id } ?: return null
+        return copyAsset(context, item.asset, "mp4")
+    }
+
+    private fun copyAsset(context: Context, asset: String, ext: String): String? {
         return try {
-            val name = assetName(category, index)
-            context.assets.open(name).use { input ->
-                val dest = File(context.filesDir, "wallpaper.jpg")
+            context.filesDir.listFiles()?.filter { it.name.startsWith("wallpaper.") }?.forEach { it.delete() }
+            val dest = File(context.filesDir, "wallpaper.$ext")
+            context.assets.open(asset).use { input ->
                 dest.outputStream().use { output -> input.copyTo(output) }
-                if (dest.length() == 0L) return null
-                "local:${dest.absolutePath}"
             }
+            if (dest.length() == 0L) return null
+            "local:${dest.absolutePath}"
         } catch (_: Throwable) {
             null
         }

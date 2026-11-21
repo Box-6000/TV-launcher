@@ -46,33 +46,27 @@ object WatchLibrary {
         }
         patchwall.forEach { uri -> readPrograms(context, uri, watch = false).forEach(::put) }
         readCatalogs(context).forEach(::put)
+        readRecommendations(context).forEach(::put)
         RecommendationHub.read(context).forEach(::put)
-        return stacks(context, merged.values.toList())
+        val ready = filmsOnly(context, merged.values.toList())
+        android.util.Log.i("LaunchWatch", "rows=${merged.size} posters=${ready.size} sample=${ready.firstOrNull()?.title}")
+        return ready
     }
 
-    private fun stacks(context: Context, items: List<WatchItem>): List<WatchItem> {
-        val grouped = items.groupBy { it.packageName }
-        val ordered = ArrayList<WatchItem>()
+    private fun filmsOnly(context: Context, items: List<WatchItem>): List<WatchItem> {
         val seen = HashSet<String>()
-        fun take(pkg: String) {
-            if (!seen.add(pkg)) return
-            val rows = grouped[pkg].orEmpty().filter { !it.poster.isNullOrBlank() }.take(6)
-            if (rows.isNotEmpty()) {
-                ordered += rows
-                return
-            }
-            val label = launchLabel(context, pkg)
-            if (label.isNotBlank()) {
-                ordered += WatchItem(
-                    title = label,
-                    poster = bannerPath(context, pkg),
-                    intentUri = null,
-                    packageName = pkg,
-                )
-            }
+        val ordered = ArrayList<WatchItem>()
+        for (item in items) {
+            val poster = item.poster?.takeIf { it.isNotBlank() } ?: continue
+            if (poster.contains("/banners/") || poster.contains("\\banners\\")) continue
+            val label = launchLabel(context, item.packageName)
+            if (item.title.length < 2 || item.title.equals(label, ignoreCase = true)) continue
+            val key = item.packageName + "|" + item.title.lowercase()
+            if (!seen.add(key)) continue
+            val local = localPoster(context, poster, item.title) ?: continue
+            ordered += item.copy(poster = local)
+            if (ordered.size >= 12) break
         }
-        cinemaPackages.forEach(::take)
-        grouped.keys.forEach(::take)
         return ordered
     }
 
@@ -113,11 +107,53 @@ object WatchLibrary {
     private fun readCatalogs(context: Context): List<WatchItem> {
         val items = ArrayList<WatchItem>()
         for ((packageName, authority) in catalogAuthorities(context)) {
+            if (authority.startsWith("null")) continue
             val query = Uri.parse("content://$authority/search_suggest_query")
-            val cursor = runCatching {
-                context.contentResolver.query(query, null, null, arrayOf(""), null)
-            }.getOrNull() ?: continue
-            cursor.use { items += suggestRows(it, packageName) }
+            val cursors = listOf(
+                runCatching { context.contentResolver.query(query, null, null, arrayOf(""), null) }.getOrNull(),
+                runCatching { context.contentResolver.query(query, null, null, null, null) }.getOrNull(),
+                runCatching { context.contentResolver.query(Uri.parse("content://$authority/search_suggest_query/"), null, null, arrayOf(""), null) }.getOrNull(),
+            )
+            for (cursor in cursors) {
+                if (cursor == null) continue
+                val rows = cursor.use { suggestRows(context, it, packageName) }
+                if (rows.isNotEmpty()) {
+                    items += rows
+                    break
+                }
+            }
+            if (items.none { it.packageName == packageName }) {
+                val seeded = runCatching {
+                    context.contentResolver.query(query, null, null, arrayOf("а"), null)
+                }.getOrNull()
+                if (seeded != null) items += seeded.use { suggestRows(context, it, packageName) }
+            }
+        }
+        return items
+    }
+
+    private fun readRecommendations(context: Context): List<WatchItem> {
+        val items = ArrayList<WatchItem>()
+        val providers = runCatching { context.packageManager.queryContentProviders(null, 0, 0) }.getOrNull().orEmpty()
+        for (info in providers) {
+            val pkg = info.packageName ?: continue
+            if (pkg !in cinemaPackages) continue
+            val authority = info.authority?.substringBefore(';').orEmpty()
+            val className = info.name.orEmpty().lowercase()
+            if (authority.isBlank()) continue
+            if (!authority.lowercase().contains("recommend") && !className.contains("recommend")) continue
+            val uris = listOf(
+                Uri.parse("content://$authority"),
+                Uri.parse("content://$authority/recommendations"),
+            )
+            for (uri in uris) {
+                val rows = readPrograms(context, uri, watch = false)
+                if (rows.isNotEmpty()) {
+                    items += rows
+                    break
+                }
+            }
+            if (items.size >= 18) break
         }
         return items
     }
@@ -128,6 +164,8 @@ object WatchLibrary {
             "ru.ivi.client" to "ru.ivi.client.tv.data.search",
             "ru.rt.video.app.tv" to "wink-search-provider-authority",
             "mobi.zona" to "mobi.zona.TvSearchProvider",
+            "ru.start.androidmobile" to "ru.start.androidmobile",
+            "com.vk.tv" to "com.vk.tv",
         )
         val seen = fixed.map { it.second }.toMutableSet()
         val found = ArrayList<Pair<String, String>>()
@@ -138,8 +176,9 @@ object WatchLibrary {
             if (pkg !in cinemaPackages) continue
             val authority = info.authority?.substringBefore(';').orEmpty()
             val name = authority.lowercase()
-            if (authority.isBlank() || authority in seen) continue
-            if (!name.contains("search") && !name.contains("suggest")) continue
+            val className = info.name.orEmpty().lowercase()
+            if (authority.isBlank() || authority in seen || authority.startsWith("null")) continue
+            if (!name.contains("search") && !name.contains("suggest") && !className.contains("search")) continue
             if (name.contains("file") || name.contains("firebase") || name.contains("ads")) continue
             seen += authority
             found += pkg to authority
@@ -147,20 +186,15 @@ object WatchLibrary {
         return found
     }
 
-    private fun suggestRows(cursor: Cursor, packageName: String): List<WatchItem> {
+    private fun suggestRows(context: Context, cursor: Cursor, packageName: String): List<WatchItem> {
         val titleIndex = findColumn(cursor, listOf("suggest_text_1", "title", "name"))
-        val posterIndex = findColumn(
-            cursor,
-            listOf("suggest_result_card_image", "suggest_icon_1", "poster_art_uri", "suggest_icon_2"),
-        )
         val dataIndex = findColumn(cursor, listOf("suggest_intent_data", "intent_uri"))
         val actionIndex = findColumn(cursor, listOf("suggest_intent_action"))
         val items = ArrayList<WatchItem>()
         while (cursor.moveToNext() && items.size < 6) {
             val title = text(cursor, titleIndex)
             if (title.length < 2) continue
-            val poster = text(cursor, posterIndex).takeIf { it.startsWith("http") || it.startsWith("content:") || it.startsWith("/") }
-            if (poster == null) continue
+            val poster = anyPoster(context, cursor, title) ?: continue
             val data = text(cursor, dataIndex)
             val action = text(cursor, actionIndex).ifBlank { "android.intent.action.VIEW" }
             val intent = when {
@@ -210,7 +244,8 @@ object WatchLibrary {
             if (title.isBlank()) continue
             val type = if (typeIndex >= 0 && cursor.getType(typeIndex) == Cursor.FIELD_TYPE_INTEGER) cursor.getInt(typeIndex) else -1
             if (!isFilm(type, typeIndex >= 0)) continue
-            val poster = image(context, cursor, posterIndex, title)
+            val poster = image(context, cursor, posterIndex, title) ?: anyPoster(context, cursor, title)
+            if (poster == null) continue
             items += WatchItem(
                 title = title,
                 poster = poster,
@@ -219,6 +254,103 @@ object WatchLibrary {
             )
         }
         return items
+    }
+
+    private fun anyPoster(context: Context, cursor: Cursor, title: String): String? {
+        val names = cursor.columnNames ?: return null
+        var fallback: String? = null
+        for (index in names.indices) {
+            if (cursor.isNull(index)) continue
+            val name = names[index].lowercase()
+            if (name.contains("intent") || name.contains("action") || name == "query") continue
+            when (cursor.getType(index)) {
+                Cursor.FIELD_TYPE_BLOB -> {
+                    val saved = posterBlob(context, cursor.getBlob(index), "$title-$index")
+                    if (saved != null) return saved
+                }
+                Cursor.FIELD_TYPE_STRING -> {
+                    val value = cursor.getString(index)?.trim().orEmpty()
+                    val picture = value.startsWith("http://") || value.startsWith("https://") ||
+                        value.startsWith("content:") || value.startsWith("/")
+                    if (!picture) continue
+                    val named = name.contains("image") || name.contains("poster") || name.contains("art") ||
+                        name.contains("thumb") || name.contains("icon") || name.contains("picture")
+                    if (named) return value
+                    if (fallback == null && (value.startsWith("http://") || value.startsWith("https://"))) fallback = value
+                }
+            }
+        }
+        return fallback
+    }
+
+    private fun localPoster(context: Context, uri: String, title: String): String? {
+        val bytes = readPosterBytes(context, uri) ?: return null
+        if (bytes.size < 128 || bytes.size > 4 * 1024 * 1024) return null
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth < 48 || bounds.outHeight < 48) return null
+        return try {
+            val dir = File(context.cacheDir, "posters").apply { mkdirs() }
+            val file = File(dir, "p-${(uri + title).hashCode().toUInt().toString(16)}.img")
+            if (!file.isFile || file.length() != bytes.size.toLong()) file.writeBytes(bytes)
+            file.absolutePath
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun readPosterBytes(context: Context, uri: String): ByteArray? {
+        return try {
+            when {
+                uri.startsWith("https://") || uri.startsWith("http://") -> httpBytes(uri)
+                uri.startsWith("/") -> File(uri).takeIf { it.isFile && it.length() <= 4L * 1024 * 1024 }?.readBytes()
+                uri.startsWith("file:") -> Uri.parse(uri).path?.let { path ->
+                    File(path).takeIf { it.isFile }?.readBytes()
+                }
+                else -> context.contentResolver.openInputStream(Uri.parse(uri))?.use { it.readBytes() }
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun httpBytes(url: String): ByteArray? {
+        return try {
+            var current = url
+            repeat(4) {
+                val connection = java.net.URL(current).openConnection() as java.net.HttpURLConnection
+                connection.instanceFollowRedirects = false
+                connection.connectTimeout = 8000
+                connection.readTimeout = 12000
+                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 11; Android TV) AppleWebKit/537.36")
+                connection.setRequestProperty("Accept", "image/*,*/*")
+                val code = connection.responseCode
+                if (code in 300..399) {
+                    val next = connection.getHeaderField("Location") ?: return null
+                    connection.disconnect()
+                    current = if (next.startsWith("http")) next else java.net.URL(java.net.URL(current), next).toString()
+                    return@repeat
+                }
+                if (code !in 200..299) {
+                    connection.disconnect()
+                    return null
+                }
+                val bytes = connection.inputStream.use { it.readBytes() }
+                connection.disconnect()
+                return bytes
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun posterBlob(context: Context, bytes: ByteArray?, title: String): String? {
+        if (bytes == null || bytes.size < 128) return null
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth < 80 || bounds.outHeight < 80) return null
+        return blobFile(context, bytes, title)
     }
 
     private fun image(context: Context, cursor: Cursor, index: Int, title: String): String? {

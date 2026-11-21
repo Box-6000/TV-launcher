@@ -2,10 +2,15 @@ package com.launch.tv
 
 import android.app.Application
 import android.app.role.RoleManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.tv.TvInputManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -17,6 +22,7 @@ import com.launch.tv.data.SettingsRepository
 import com.launch.tv.data.SystemStatus
 import com.launch.tv.data.VoiceSearch
 import com.launch.tv.data.WallpaperLoader
+import com.launch.tv.data.WallpaperStudio
 import com.launch.tv.data.WeatherRepository
 import com.launch.tv.model.Catalog
 import com.launch.tv.model.LaunchUiState
@@ -48,6 +54,8 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
     private val refreshMutex = Mutex()
     private var toastJob: Job? = null
     private var inputCallback: TvInputManager.TvInputCallback? = null
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    private var rssiReceiver: BroadcastReceiver? = null
     private var recsBound = false
     private var programsAskedAt = 0L
 
@@ -71,7 +79,7 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
             edit { it.copy(weather = fresh ?: it.weather, weatherLoading = false) }
         }
         viewModelScope.launch {
-            val gate = async { delay(1700) }
+            val gate = async { delay(1600) }
             refreshApps()
             refreshStatus()
             refreshSources()
@@ -97,6 +105,52 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
                 if (fresh != null) edit { it.copy(weather = fresh, weatherLoading = false) }
             }
         }
+        watchSignal()
+        refreshLive()
+    }
+
+    private fun refreshLive() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val current = settingsRepo.current()
+            if (!current.wallpaperId.startsWith("live:")) return@launch
+            val key = WallpaperStudio.liveKey(current.wallpaperId.removePrefix("live:"))
+            val item = WallpaperStudio.live.firstOrNull { it.id == key } ?: return@launch
+            val expected = runCatching { context.assets.openFd(item.asset).use { it.length } }.getOrNull()
+            val file = WallpaperLoader.motionFile(current.wallpaperUri)
+            if (expected != null && file != null && file.length() == expected && current.wallpaperId == "live:$key") return@launch
+            val saved = WallpaperStudio.installLive(context, key) ?: return@launch
+            settingsRepo.update { it.copy(wallpaperUri = saved, wallpaperId = "live:$key") }
+        }
+    }
+
+    private fun watchSignal() {
+        val context = getApplication<Application>()
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                refreshStatus()
+            }
+
+            override fun onLost(network: Network) {
+                refreshStatus()
+            }
+        }
+        runCatching { manager.registerDefaultNetworkCallback(callback) }
+        netCallback = callback
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                refreshStatus()
+            }
+        }
+        val filter = IntentFilter("android.net.wifi.RSSI_CHANGED")
+        if (Build.VERSION.SDK_INT >= 33) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            context.registerReceiver(receiver, filter)
+        }
+        rssiReceiver = receiver
     }
 
     fun refreshApps() {
@@ -370,7 +424,7 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val saved = withContext(Dispatchers.IO) { WallpaperLoader.import(context, uri) }
             if (saved == null) {
-                toast("Не удалось прочитать изображение")
+                toast("Не удалось прочитать файл")
             } else {
                 settingsRepo.update { it.copy(wallpaperUri = saved, wallpaperId = "custom") }
                 toast("Свои обои установлены")
@@ -405,6 +459,23 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
             }
             settingsRepo.update { it.copy(wallpaperUri = saved, wallpaperId = "studio:$category:$index") }
             toast("Обои установлены")
+        }
+    }
+
+    fun useLive(id: String) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            toast("Ставлю живые обои")
+            val key = WallpaperStudio.liveKey(id)
+            val saved = withContext(Dispatchers.IO) {
+                WallpaperStudio.installLive(context, key)
+            }
+            if (saved == null) {
+                toast("Не удалось поставить обои")
+                return@launch
+            }
+            settingsRepo.update { it.copy(wallpaperUri = saved, wallpaperId = "live:$key") }
+            toast("Живые обои установлены")
         }
     }
 
@@ -731,6 +802,11 @@ class LaunchViewModel(app: Application) : AndroidViewModel(app) {
         val context = getApplication<Application>()
         val manager = context.getSystemService(Context.TV_INPUT_SERVICE) as? TvInputManager
         inputCallback?.let { manager?.unregisterCallback(it) }
+        netCallback?.let { callback ->
+            val connected = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            runCatching { connected.unregisterNetworkCallback(callback) }
+        }
+        rssiReceiver?.let { runCatching { context.unregisterReceiver(it) } }
         RecommendationHub.onChanged = null
         super.onCleared()
     }

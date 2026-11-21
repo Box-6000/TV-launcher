@@ -72,7 +72,9 @@ fun menuIconColor(id: String, accent: Color): Color = when (id) {
     else -> Color.White
 }
 
-fun sceneTitle(id: String): String = com.launch.tv.data.WallpaperStudio.title(id) ?: when (sceneId(id)) {
+fun sceneTitle(id: String): String = com.launch.tv.data.WallpaperStudio.liveTitle(id)
+    ?: com.launch.tv.data.WallpaperStudio.title(id)
+    ?: when (sceneId(id)) {
     "aurora" -> "Аврора"
     "ocean" -> "Океан"
     "sunset" -> "Закат"

@@ -294,20 +294,21 @@ private fun SideMenu(
     val requesters = remember(sections.size) { List(sections.size) { FocusRequester() } }
     Column(
         modifier
-            .width(if (open) 248.dp else 88.dp)
+            .width(if (open) 240.dp else 76.dp)
             .fillMaxHeight()
             .onFocusChanged { onOpenChange(it.hasFocus) }
-            .padding(start = 10.dp, end = 10.dp, top = 72.dp, bottom = 12.dp),
+            .padding(start = 14.dp, end = 8.dp, top = 72.dp, bottom = 12.dp),
     ) {
         sections.forEachIndexed { index, (section, meta) ->
-            val shape = RoundedCornerShape(14.dp)
+            val shape = RoundedCornerShape(18.dp)
             val requester = if (index == 0) menuLead else requesters[index]
+            val selected = section == current
             Surface(
                 onClick = { onPick(section) },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .height(52.dp)
+                    .padding(vertical = 5.dp)
+                    .height(48.dp)
                     .focusRequester(requester)
                     .focusProperties {
                         up = if (index == 0) voiceFocus else if (index == 1) menuLead else requesters[index - 1]
@@ -316,20 +317,34 @@ private fun SideMenu(
                     .okPress({ onPick(section) }) {},
                 shape = ClickableSurfaceDefaults.shape(shape),
                 colors = ClickableSurfaceDefaults.colors(
-                    containerColor = if (section == current) Color.White.copy(alpha = 0.16f) else Color.Transparent,
-                    focusedContainerColor = Color.White.copy(alpha = 0.28f),
+                    containerColor = if (selected) Color.White.copy(alpha = 0.10f) else Color.Transparent,
+                    focusedContainerColor = Color.White.copy(alpha = 0.14f),
                 ),
                 border = ClickableSurfaceDefaults.border(
+                    border = androidx.tv.material3.Border(
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            Color.White.copy(alpha = if (selected) 0.16f else 0f),
+                        ),
+                        shape = shape,
+                    ),
                     focusedBorder = androidx.tv.material3.Border(
-                        border = androidx.compose.foundation.BorderStroke(2.dp, Color.White),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.55f)),
                         shape = shape,
                     ),
                 ),
                 scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
             ) {
                 Row(
-                    Modifier.fillMaxSize().padding(horizontal = 6.dp),
+                    Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = if (open) 12.dp else 0.dp),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = if (open) {
+                        androidx.compose.foundation.layout.Arrangement.Start
+                    } else {
+                        androidx.compose.foundation.layout.Arrangement.Center
+                    },
                 ) {
                     DrawerGlyph(meta.second, Modifier.size(28.dp), iconTint)
                     if (open) {

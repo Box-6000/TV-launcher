@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -206,27 +207,35 @@ fun Modifier.stepKeys(onLeft: (() -> Unit)?, onRight: (() -> Unit)?): Modifier =
 fun Wallpaper(settings: UserSettings) {
     val context = LocalContext.current
     val palette = LocalPalette.current
+    val motion = WallpaperLoader.motionFile(settings.wallpaperUri)
     val photo by produceState<ImageBitmap?>(null, settings.wallpaperUri, settings.wallpaperId, settings.themeId) {
         value = withContext(Dispatchers.IO) {
+            if (motion != null) return@withContext null
             val custom = settings.wallpaperUri?.let { WallpaperLoader.load(context, it) }
             if (custom != null) return@withContext custom
             val id = settings.wallpaperId.ifBlank { settings.themeId }
             if (sceneId(id) == "gradient") null else WallpaperLoader.loadResource(context, wallpaperDrawable(id))
         }
     }
+    val dim = Brush.verticalGradient(
+        listOf(
+            Color.Black.copy(alpha = (settings.dimPercent / 180f).coerceIn(0.02f, 0.45f)),
+            Color.Black.copy(alpha = (settings.dimPercent / 420f).coerceIn(0f, 0.22f)),
+            Color.Black.copy(alpha = ((settings.dimPercent + 4) / 170f).coerceIn(0.04f, 0.5f)),
+        ),
+    )
+    if (motion != null) {
+        Box(Modifier.fillMaxSize()) {
+            MotionWallpaper(motion)
+            Box(Modifier.fillMaxSize().background(dim))
+        }
+        return
+    }
     Canvas(Modifier.fillMaxSize()) {
         val image = photo
         if (image != null) {
             drawCover(image)
-            drawRect(
-                brush = Brush.verticalGradient(
-                    listOf(
-                        Color.Black.copy(alpha = (settings.dimPercent / 180f).coerceIn(0.02f, 0.45f)),
-                        Color.Black.copy(alpha = (settings.dimPercent / 420f).coerceIn(0f, 0.22f)),
-                        Color.Black.copy(alpha = ((settings.dimPercent + 4) / 170f).coerceIn(0.04f, 0.5f)),
-                    ),
-                ),
-            )
+            drawRect(brush = dim)
         } else {
             drawPaletteGradient(palette)
         }
@@ -500,25 +509,26 @@ private fun InputPills(
 
 @Composable
 fun VoiceButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(percent = 50)
     Surface(
         onClick = {},
-        modifier = modifier.size(48.dp).okPress(onClick) {},
+        modifier = modifier.size(44.dp).okPress(onClick) {},
         shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(shape),
         colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
-            containerColor = Color.White.copy(alpha = 0.12f),
-            focusedContainerColor = Color.White.copy(alpha = 0.28f),
+            containerColor = Color.White.copy(alpha = 0.08f),
+            focusedContainerColor = Color.White.copy(alpha = 0.16f),
         ),
         border = androidx.tv.material3.ClickableSurfaceDefaults.border(
             border = androidx.tv.material3.Border(
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.22f)),
                 shape = shape,
             ),
             focusedBorder = androidx.tv.material3.Border(
-                border = BorderStroke(2.dp, Color.White),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.7f)),
                 shape = shape,
             ),
         ),
+        scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(focusedScale = 1f),
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             MicGlyph(Modifier.size(22.dp))
@@ -660,19 +670,20 @@ private fun NetBadge(net: NetStatus) {
                     drawLine(active, Offset(size.width * 0.48f, size.height * 0.34f), Offset(size.width * 0.48f, size.height * 0.18f), 1.7.dp.toPx(), StrokeCap.Round)
                 }
                 else -> {
-                    val bars = if (net.kind == NetKind.Offline) 0 else (net.level + 1).coerceIn(1, 3)
-                    val origin = Offset(size.width * 0.18f, size.height * 0.78f)
-                    drawCircle(if (bars > 0) active else active.copy(alpha = 0.25f), 1.6.dp.toPx(), origin)
-                    repeat(3) { index ->
-                        val radius = size.minDimension * (0.28f + index * 0.22f)
+                    val bars = if (net.kind == NetKind.Offline) 0 else (net.level + 1).coerceIn(1, 4)
+                    val paint = if (net.kind == NetKind.Wifi && net.level <= 0) Color(0xFFFFC56A) else active
+                    val origin = Offset(size.width * 0.16f, size.height * 0.80f)
+                    drawCircle(if (bars > 0) paint else paint.copy(alpha = 0.22f), 1.6.dp.toPx(), origin)
+                    repeat(4) { index ->
+                        val radius = size.minDimension * (0.22f + index * 0.18f)
                         drawArc(
-                            color = if (index < bars) active else active.copy(alpha = 0.25f),
+                            color = if (index < bars) paint else paint.copy(alpha = 0.2f),
                             startAngle = 225f,
                             sweepAngle = 90f,
                             useCenter = false,
                             topLeft = Offset(origin.x - radius, origin.y - radius),
                             size = androidx.compose.ui.geometry.Size(radius * 2, radius * 2),
-                            style = Stroke(1.7.dp.toPx(), cap = StrokeCap.Round),
+                            style = Stroke(1.8.dp.toPx(), cap = StrokeCap.Round),
                         )
                     }
                 }
@@ -1079,32 +1090,63 @@ fun ToastBanner(text: String) {
 @Composable
 fun Splash() {
     val palette = LocalPalette.current
-    val alpha = remember { androidx.compose.animation.core.Animatable(0f) }
-    val scale = remember { androidx.compose.animation.core.Animatable(0.82f) }
+    val play = remember { androidx.compose.animation.core.Animatable(0f) }
     LaunchedEffect(Unit) {
         FocusTick.playOpen()
-        alpha.animateTo(1f, androidx.compose.animation.core.tween(640))
+        play.animateTo(1f, androidx.compose.animation.core.tween(1100))
     }
-    LaunchedEffect(Unit) {
-        scale.animateTo(
-            1f,
-            androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 280f),
-        )
-    }
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)), contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.graphicsLayer {
-                this.alpha = alpha.value
-                scaleX = scale.value
-                scaleY = scale.value
-            },
-        ) {
-            Mark(Modifier.size(92.dp))
+    val t = play.value
+    val titleAlpha = ((t - 0.35f) / 0.4f).coerceIn(0f, 1f)
+    val markScale = 0.92f + 0.08f * t
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.38f)), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(Modifier.size(108.dp), contentAlignment = Alignment.Center) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val inset = 3.dp.toPx()
+                    val arc = androidx.compose.ui.geometry.Size(size.width - inset * 2, size.height - inset * 2)
+                    val topLeft = androidx.compose.ui.geometry.Offset(inset, inset)
+                    drawArc(
+                        color = Color.White.copy(alpha = 0.18f),
+                        startAngle = 0f,
+                        sweepAngle = 360f,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arc,
+                        style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                    drawArc(
+                        color = palette.accent,
+                        startAngle = -90f,
+                        sweepAngle = 360f * t,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arc,
+                        style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                }
+                Mark(
+                    Modifier
+                        .size(58.dp)
+                        .graphicsLayer {
+                            scaleX = markScale
+                            scaleY = markScale
+                            alpha = (0.35f + 0.65f * t).coerceIn(0f, 1f)
+                        },
+                )
+            }
             Spacer(Modifier.height(18.dp))
-            Text("Launch", color = palette.text, fontSize = 48.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Text("Экран телевизора", color = palette.muted, fontSize = 18.sp)
+            Text(
+                "Launch",
+                color = palette.text.copy(alpha = titleAlpha),
+                fontSize = 40.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Экран телевизора",
+                color = palette.muted.copy(alpha = titleAlpha),
+                fontSize = 16.sp,
+            )
         }
     }
 }

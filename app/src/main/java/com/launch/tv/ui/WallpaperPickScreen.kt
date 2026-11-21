@@ -78,11 +78,20 @@ fun WallpaperPickScreen(viewModel: LaunchViewModel, onGallery: () -> Unit) {
     }
     Column(Modifier.fillMaxSize()) {
         Text(
-            "10 категорий, в каждой 10 разных фото. OK ставит выбранное.",
+            "Живые обои, фото, GIF или видео. OK ставит выбранное.",
             color = palette.muted,
             fontSize = 14.sp,
             maxLines = 1,
         )
+        Text("Живые", color = palette.text, fontSize = 15.sp, modifier = Modifier.padding(top = 8.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 6.dp),
+        ) {
+            WallpaperStudio.live.forEach { item ->
+                LiveCard(item) { viewModel.useLive(item.id) }
+            }
+        }
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(top = 8.dp),
@@ -119,7 +128,7 @@ fun WallpaperPickScreen(viewModel: LaunchViewModel, onGallery: () -> Unit) {
         }
         if (flash) Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                if (images.isEmpty()) "Флешка: картинок пока нет" else "Флешка",
+                if (images.isEmpty()) "Флешка: файлов пока нет" else "Флешка",
                 color = palette.muted,
                 fontSize = 13.sp,
                 modifier = Modifier.weight(1f),
@@ -162,6 +171,31 @@ fun WallpaperPickScreen(viewModel: LaunchViewModel, onGallery: () -> Unit) {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun LiveCard(item: WallpaperStudio.LiveWallpaper, onPick: () -> Unit) {
+    val context = LocalContext.current
+    val image by produceState<ImageBitmap?>(null, item.id) {
+        value = withContext(Dispatchers.IO) { WallpaperStudio.thumb(context, item.thumb, 0) }
+    }
+    Surface(
+        onClick = onPick,
+        modifier = Modifier.width(168.dp).height(96.dp).okPress(onPick) {},
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            if (image != null) {
+                Image(image!!, item.title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            }
+            Text(
+                item.title,
+                color = Color.White,
+                fontSize = 14.sp,
+                modifier = Modifier.align(Alignment.BottomStart).padding(8.dp),
+            )
         }
     }
 }

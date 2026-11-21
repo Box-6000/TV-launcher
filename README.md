@@ -1,6 +1,8 @@
 # Launch
 
-Лаунчер домашнего экрана для Android TV. Текущая версия **1.26.0** (versionCode 28). Пакет `com.launch.tv`.
+Лаунчер домашнего экрана для Android TV. Текущая версия **1.34.0** (versionCode 36). Пакет `com.launch.tv`.
+
+Установка этого лаунчера с телефона — **отдельное приложение**, не часть лаунчера. Оно называется «Установка Launch», пакет `com.launch.installer`, версия **1.0.3** (versionCode 4). Метка в Git: `installer-1.0.3`. На телевизор его не ставят.
 
 Автор программы — **Mr.Box-600**. Launch не является продуктом Google, Xiaomi или Apple.
 
@@ -46,6 +48,22 @@ Release-сборка подписывается отладочным ключо�
 ```properties
 sdk.dir=C:\\path\\to\\android-sdk
 ```
+
+## Отдельное приложение: установка с телефона
+
+Это не лаунчер. Модуль `:installer`, пакет `com.launch.installer`, имя на телефоне «Установка Launch». Телефон ищет Android TV в той же сети Wi‑Fi, один раз просит на экране телевизора «Разрешить» и ставит текущую сборку Launch. На телефоне остаётся только установщик. Сам Launch открывается на телевизоре.
+
+Сборка установщика подхватывает release-файл лаунчера и кладёт его внутрь:
+
+```powershell
+$env:JAVA_HOME = "C:\path\to\jdk-17"
+$env:ANDROID_HOME = "C:\path\to\android-sdk"
+.\gradlew.bat :installer:assembleRelease
+```
+
+Готовый файл: `installer\build\outputs\apk\release\installer-release.apk`. Его ставят на телефон, не на телевизор.
+
+На телевизоре нужна обычная отладка по сети, обычно порт 5555. Пункт только с кодом сопряжения установщик не использует. Samsung на Tizen и LG на webOS приложение не меняет.
 
 ## Установка на любой телевизор
 
@@ -115,7 +133,7 @@ adb -s 192.168.1.50:5555 shell am start -n com.launch.tv/.MainActivity
 ## Структура
 
 ```
-app/src/main/java/com/launch/tv/
+app/src/main/java/com/launch/tv/   лаунчер для телевизора, пакет com.launch.tv
   MainActivity.kt          точка входа и кнопки пульта
   LaunchViewModel.kt       состояние экрана и команды
   model/Models.kt          разделы и настройки
@@ -123,6 +141,7 @@ app/src/main/java/com/launch/tv/
   ui/                      главный экран, списки, настройки
   ui/theme/                палитры и темы
 app/src/main/res/drawable-nodpi/   фотографии тем
+installer/                       отдельное приложение для телефона, пакет com.launch.installer
 ```
 
 Подробное описание экранов и условий использования: [docs/rukovodstvo.md](docs/rukovodstvo.md).

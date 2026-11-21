@@ -11,7 +11,7 @@ import java.io.File
 data class WallpaperImage(val uri: Uri, val label: String)
 
 object WallpaperSources {
-    private val extensions = setOf("jpg", "jpeg", "png", "webp")
+    private val extensions = setOf("jpg", "jpeg", "png", "webp", "gif", "mp4", "webm", "mkv", "3gp")
 
     fun removableMounted(context: Context): Boolean = volumes(context).isNotEmpty()
 

@@ -155,7 +155,9 @@ private fun MainSettings(
     val context = LocalContext.current
     val settings = state.settings
     val wallpaperLabel = when {
+        settings.wallpaperId.startsWith("live:") -> sceneTitle(settings.wallpaperId)
         settings.wallpaperId.startsWith("studio:") -> sceneTitle(settings.wallpaperId)
+        settings.wallpaperUri != null && com.launch.tv.data.WallpaperLoader.motionFile(settings.wallpaperUri) != null -> "Анимация"
         settings.wallpaperUri != null -> "Своё изображение"
         else -> sceneTitle(settings.wallpaperId)
     }
@@ -175,7 +177,7 @@ private fun MainSettings(
             )
         }
         item { CycleRow("Обои", wallpaperLabel, "Фотографии или градиент. Свой файл заменяет выбранное", { viewModel.cycleWallpaper(false) }, { viewModel.cycleWallpaper(true) }) }
-        item { ActionRow("Выбрать изображение", "Галерея", "10 категорий по 10 фото. Свой файл — с флешки", { viewModel.settingsPage(SettingsPage.Wallpaper) }) }
+        item { ActionRow("Выбрать изображение", "Галерея", "Фото, GIF или видео. Свой файл — с флешки", { viewModel.settingsPage(SettingsPage.Wallpaper) }) }
         item { ActionRow("Сбросить изображение", if (settings.wallpaperUri == null) "Нет" else "Есть", "Вернуться к выбранным обоям", { viewModel.setWallpaperUri(null) }) }
         item { ActionRow("Размер иконок", "${settings.iconDp}", "На экране видно, какого размера станет иконка", { viewModel.settingsPage(SettingsPage.IconSize) }) }
         item { CycleRow("Анимации", settings.motion.label, "Только меню. Иконки не увеличиваются", { viewModel.cycleMotion(false) }, { viewModel.cycleMotion(true) }) }

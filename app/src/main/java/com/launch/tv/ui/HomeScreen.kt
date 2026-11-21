@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,7 +27,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -38,10 +36,6 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
-import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -101,21 +95,34 @@ fun HomeScreen(
         delay(180)
         runCatching { lead.requestFocus() }
     }
-    val compact = settings.showWatch && watch.isNotEmpty()
+    val posters = watch.filter { !it.poster.isNullOrBlank() }
+    val showShelf = settings.showWatch && posters.isNotEmpty()
+    val showRecent = settings.showRecents && recents.isNotEmpty()
+    val crowded = showShelf && showRecent
     Column(Modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
+        BoxWithConstraints(
+            Modifier
+                .weight(1f)
                 .fillMaxWidth()
-                .weight(1f),
-            contentAlignment = Alignment.Center,
+                .clipToBounds(),
         ) {
-            ClockStage(settings, weather, weatherLoading, net, onRetryWeather, compact)
+            val room = maxHeight
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                ClockStage(
+                    settings,
+                    weather,
+                    weatherLoading,
+                    net,
+                    onRetryWeather,
+                    available = room,
+                )
+            }
         }
-        if (settings.showWatch && watch.isNotEmpty()) {
-            WatchShelf(watch, onOpenWatch)
+        if (showShelf) {
+            WatchShelf(posters, onOpenWatch, short = crowded)
         }
-        if (settings.showRecents && recents.isNotEmpty()) {
-            RecentRow(recents, onOpen, onMenu)
+        if (showRecent) {
+            RecentRow(recents, onOpen, onMenu, compact = crowded)
         }
         if (settings.showDock) {
             Dock(
@@ -126,6 +133,7 @@ fun HomeScreen(
                 onOpen = onOpen,
                 onMenu = onMenu,
                 onSection = onSection,
+                maxIcon = if (crowded) 56 else 76,
             )
         }
     }
@@ -138,16 +146,23 @@ private fun ClockStage(
     weatherLoading: Boolean,
     net: NetStatus,
     onRetry: () -> Unit,
-    compact: Boolean,
+    available: androidx.compose.ui.unit.Dp,
 ) {
     val palette = LocalPalette.current
+    val tight = available < 300.dp
+    val tiny = available < 190.dp
+    val clockSize = when {
+        tiny -> 46
+        tight -> 60
+        else -> settings.clockSp
+    }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = if (settings.clockPlate) {
             Modifier
                 .clip(RoundedCornerShape(36.dp))
                 .background(Color(0x99141820))
-                .padding(horizontal = if (compact) 28.dp else 48.dp, vertical = if (compact) 14.dp else 28.dp)
+                .padding(horizontal = if (tight) 28.dp else 48.dp, vertical = if (tiny) 4.dp else if (tight) 8.dp else 24.dp)
         } else {
             Modifier
         },
@@ -156,7 +171,7 @@ private fun ClockStage(
             Text(
                 text = rememberClock(settings.clock24, settings.showSeconds),
                 color = palette.text,
-                fontSize = (if (compact) settings.clockSp.coerceAtMost(68) else settings.clockSp).sp,
+                fontSize = clockSize.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
             )
@@ -165,14 +180,15 @@ private fun ClockStage(
             Text(
                 text = rememberDate(),
                 color = palette.muted,
-                fontSize = if (compact) 16.sp else 24.sp,
+                fontSize = if (tiny) 13.sp else if (tight) 15.sp else 22.sp,
                 fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(top = 4.dp),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 2.dp),
             )
         }
         if (settings.showWeather) {
-            Spacer(Modifier.height(if (compact) 8.dp else 18.dp))
-            WeatherBlock(settings, weather, weatherLoading, net, onRetry, compact)
+            Spacer(Modifier.height(if (tiny) 2.dp else if (tight) 4.dp else 14.dp))
+            WeatherBlock(settings, weather, weatherLoading, net, onRetry, tight, tiny)
         }
         if (settings.showHints) {
             Text(
@@ -193,40 +209,54 @@ private fun WeatherBlock(
     net: NetStatus,
     onRetry: () -> Unit,
     compact: Boolean,
+    tiny: Boolean = false,
 ) {
     val palette = LocalPalette.current
     if (weather != null) {
         val temp = "${displayTemp(weather.tempC, settings.fahrenheit)}${tempUnit(settings.fahrenheit)}"
         val caption = "${weatherLabel(weather.code)} · ${weather.city}"
         val facts = weatherFacts(weather)
-        if (settings.weatherInline || compact) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                WeatherMotion(weather.code, settings.motion, if (compact) 36.dp else 48.dp)
-                Column(Modifier.padding(start = 12.dp)) {
-                    Text(
-                        "$temp   $caption",
-                        color = palette.text,
-                        fontSize = if (compact) 20.sp else 28.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    if (facts.isNotBlank()) {
-                        Text(facts, color = palette.muted, fontSize = if (compact) 13.sp else 16.sp)
-                    }
-                }
+        val headline = when {
+            tiny -> listOf(temp, facts).filter { it.isNotBlank() }.joinToString("  ")
+            settings.weatherInline -> "$temp  $caption"
+            else -> temp
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            WeatherMotion(weather.code, settings.motion, if (tiny) 22.dp else if (compact) 28.dp else 52.dp)
+            Text(
+                text = headline,
+                color = palette.text,
+                fontSize = if (tiny) 16.sp else if (compact) 20.sp else 40.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            if (!tiny && !settings.weatherInline) {
+                Text(
+                    caption,
+                    color = palette.muted,
+                    fontSize = if (compact) 14.sp else 18.sp,
+                    textAlign = TextAlign.Center,
+                )
             }
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                WeatherMotion(weather.code, settings.motion, 64.dp)
-                Column(Modifier.padding(start = 16.dp)) {
-                    Text(temp, color = palette.text, fontSize = 48.sp, fontWeight = FontWeight.SemiBold)
-                    Text(caption, color = palette.muted, fontSize = 20.sp)
-                    if (facts.isNotBlank()) {
-                        Text(facts, color = palette.text, fontSize = 18.sp, modifier = Modifier.padding(top = 2.dp))
-                    }
-                    if (weather.outlook.isNotBlank()) {
-                        Text(weather.outlook, color = palette.muted, fontSize = 16.sp, modifier = Modifier.padding(top = 2.dp))
-                    }
-                }
+            if (!tiny && facts.isNotBlank()) {
+                Text(
+                    facts,
+                    color = palette.text,
+                    fontSize = if (compact) 14.sp else 18.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            if (!compact && !tiny && !settings.weatherInline && weather.outlook.isNotBlank()) {
+                Text(
+                    weather.outlook,
+                    color = palette.muted,
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
             }
         }
     } else {
@@ -351,144 +381,70 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.rain(tick: Float) {
 }
 
 @Composable
-private fun WatchShelf(items: List<WatchItem>, onOpen: (WatchItem) -> Unit) {
+private fun WatchShelf(items: List<WatchItem>, onOpen: (WatchItem) -> Unit, short: Boolean) {
     val palette = LocalPalette.current
-    val stacks = remember(items) { items.groupBy { it.packageName.ifBlank { it.title } }.values.map { it.take(6) } }
-    Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+    Column(Modifier.fillMaxWidth().height(if (short) 112.dp else 144.dp)) {
         Text(
             "Недавние фильмы и передачи",
             color = palette.muted,
-            fontSize = 13.sp,
-            modifier = Modifier.padding(bottom = 6.dp),
+            fontSize = 12.sp,
+            modifier = Modifier.padding(bottom = 4.dp),
         )
         LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 12.dp, end = 28.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(end = 20.dp),
         ) {
-            items(stacks, key = { it.first().packageName }) { stack ->
-                WatchStack(stack, onOpen)
+            items(items, key = { it.packageName + "|" + it.title }) { item ->
+                WatchPoster(item, onOpen, short)
             }
         }
     }
 }
 
 @Composable
-private fun WatchStack(stack: List<WatchItem>, onOpen: (WatchItem) -> Unit) {
-    val context = LocalContext.current
-    var index by remember(stack) { mutableIntStateOf(0) }
-    val item = stack[index.coerceIn(stack.indices)]
-    val appName = remember(item.packageName) { com.launch.tv.data.WatchLibrary.launchLabel(context, item.packageName) }
-    Column(Modifier.width(168.dp)) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(104.dp)
-                .onPreviewKeyEvent { event ->
-                    if (event.type != KeyEventType.KeyDown || stack.size < 2) return@onPreviewKeyEvent false
-                    when (event.nativeKeyEvent.keyCode) {
-                        AndroidKeyEvent.KEYCODE_DPAD_UP -> {
-                            index = (index + 1) % stack.size
-                            true
-                        }
-                        else -> false
-                    }
-                },
-        ) {
-            val depth = (stack.size - 1).coerceAtMost(2)
-            for (layer in depth downTo 1) {
-                Box(
-                    Modifier
-                        .align(Alignment.BottomStart)
-                        .offset(x = (layer * 8).dp, y = -(layer * 7).dp)
-                        .width(148.dp)
-                        .height(84.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFF2A3344)),
-                )
-            }
-            WatchCard(
-                item,
-                onOpen,
-                Modifier.align(Alignment.BottomStart).width(148.dp).height(84.dp),
-            )
-        }
-        Text(
-            appName.ifBlank { item.title },
-            color = Color.White,
-            fontSize = 12.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 4.dp),
-        )
-        if (stack.size > 1) {
-            Text(
-                "${index + 1} из ${stack.size}",
-                color = Color.White.copy(alpha = 0.6f),
-                fontSize = 10.sp,
-            )
-        }
-    }
-}
-
-@Composable
-private fun WatchCard(item: WatchItem, onOpen: (WatchItem) -> Unit, modifier: Modifier = Modifier) {
+private fun WatchPoster(item: WatchItem, onOpen: (WatchItem) -> Unit, short: Boolean) {
     val context = LocalContext.current
     val poster by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, item.poster) {
-        val uri = item.poster
-        value = if (uri.isNullOrBlank()) {
-            null
-        } else {
-            withContext(Dispatchers.IO) { WallpaperLoader.poster(context, uri) }
-        }
+        value = withContext(Dispatchers.IO) { WallpaperLoader.poster(context, item.poster) }
     }
-    val appName = remember(item.packageName) { com.launch.tv.data.WatchLibrary.launchLabel(context, item.packageName) }
-    val shape = RoundedCornerShape(12.dp)
-    androidx.tv.material3.Surface(
-        onClick = {},
-        modifier = modifier.okPress({ onOpen(item) }) {},
-        shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(shape),
-        colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
-            containerColor = Color(0xFF161C28),
-            focusedContainerColor = Color(0xFF161C28),
-        ),
-        border = androidx.tv.material3.ClickableSurfaceDefaults.border(
-            border = androidx.tv.material3.Border(
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
-                shape = shape,
+    val image = poster ?: return
+    val shape = RoundedCornerShape(10.dp)
+    val cardW = if (short) 68.dp else 86.dp
+    val cardH = if (short) 78.dp else 104.dp
+    Column(Modifier.width(cardW)) {
+        androidx.tv.material3.Surface(
+            onClick = {},
+            modifier = Modifier
+                .width(cardW)
+                .height(cardH)
+                .okPress({ onOpen(item) }) {},
+            shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(shape),
+            colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
+                containerColor = Color.Transparent,
+                focusedContainerColor = Color.Transparent,
             ),
-            focusedBorder = androidx.tv.material3.Border(
-                border = androidx.compose.foundation.BorderStroke(2.dp, Color.White),
-                shape = shape,
+            border = androidx.tv.material3.ClickableSurfaceDefaults.border(
+                border = androidx.tv.material3.Border(
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)),
+                    shape = shape,
+                ),
+                focusedBorder = androidx.tv.material3.Border(
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, Color.White.copy(alpha = 0.72f)),
+                    shape = shape,
+                ),
             ),
-        ),
-    ) {
-        Box(Modifier.fillMaxSize().clip(shape)) {
-            if (poster != null) {
-                Image(poster!!, item.title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                if (!item.title.equals(appName, ignoreCase = true)) {
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .height(28.dp)
-                            .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC10141C)))),
-                    )
-                    Text(
-                        item.title,
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, end = 8.dp, bottom = 6.dp),
-                    )
-                }
-            } else {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    if (item.packageName.isNotBlank()) AppIcon(item.packageName, 52.dp)
-                }
-            }
+            scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(focusedScale = 1.04f),
+        ) {
+            Image(image, item.title, Modifier.fillMaxSize().clip(shape), contentScale = ContentScale.Crop)
         }
+        Text(
+            item.title,
+            color = Color.White,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 3.dp),
+        )
     }
 }
 
@@ -501,6 +457,7 @@ private fun Dock(
     onOpen: (TvApp) -> Unit,
     onMenu: (TvApp) -> Unit,
     onSection: (Section) -> Unit,
+    maxIcon: Int = 76,
 ) {
     val palette = LocalPalette.current
     val shape = RoundedCornerShape(32.dp)
@@ -511,9 +468,11 @@ private fun Dock(
         contentAlignment = Alignment.Center,
     ) {
         val count = favorites.size.coerceAtLeast(1)
-        val gap = 8.dp
-        val slot = (maxWidth - 24.dp - gap * (count - 1)) / count
-        val size = iconDp.dp.coerceIn(28.dp, (slot - 8.dp).coerceAtLeast(28.dp))
+        val gap = 10.dp
+        val pad = 14.dp
+        val preferred = iconDp.dp.coerceIn(52.dp, maxIcon.dp)
+        val room = maxWidth - pad * 2 - gap * (count - 1)
+        val size = (room / count).coerceIn(52.dp, preferred)
         var caption by remember(favorites) { mutableStateOf(favorites.firstOrNull()?.label.orEmpty()) }
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
             if (labels != "never") {
@@ -528,42 +487,39 @@ private fun Dock(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
                 )
             }
-            LazyRow(
+            Row(
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .wrapContentWidth()
                     .background(palette.glass, shape)
                     .border(1.dp, Color.White.copy(alpha = 0.12f), shape)
-                    .padding(vertical = 8.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(gap, Alignment.CenterHorizontally),
+                    .padding(horizontal = pad, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(gap),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-            if (favorites.isEmpty()) {
-                item {
+                if (favorites.isEmpty()) {
                     PlaceholderCard(
                         title = "Добавить",
                         subtitle = "Открыть список приложений",
                         onClick = { onSection(Section.Apps) },
                         modifier = Modifier.focusRequester(lead),
                     )
+                } else {
+                    favorites.forEach { app ->
+                        DockIcon(
+                            app = app,
+                            size = size,
+                            labels = "never",
+                            modifier = if (app.packageName == favorites.first().packageName) {
+                                Modifier.focusRequester(lead)
+                            } else {
+                                Modifier
+                            },
+                            onOpen = { onOpen(app) },
+                            onMenu = { onMenu(app) },
+                            onFocused = { caption = app.label },
+                        )
+                    }
                 }
-            } else {
-                items(favorites, key = { it.packageName }) { app ->
-                    DockIcon(
-                        app = app,
-                        size = size,
-                        labels = "never",
-                        modifier = if (app.packageName == favorites.first().packageName) {
-                            Modifier.focusRequester(lead).padding(horizontal = 6.dp)
-                        } else {
-                            Modifier.padding(horizontal = 6.dp)
-                        },
-                        onOpen = { onOpen(app) },
-                        onMenu = { onMenu(app) },
-                        onFocused = { caption = app.label },
-                    )
-                }
-            }
             }
         }
     }
@@ -610,7 +566,6 @@ private fun DockIcon(
                 .padding(top = if (labels == "never") 0.dp else 6.dp)
                 .width(size)
                 .height(size)
-                .iconFocusLift(focused)
                 .onFocusChanged {
                     focused = it.isFocused
                     if (it.isFocused) onFocused(app.label)
@@ -634,7 +589,7 @@ private fun DockIcon(
                 ),
             ),
         ) {
-            AppIcon(app.packageName, size, Modifier.clip(shape))
+            AppIcon(app.packageName, size - 6.dp, Modifier.padding(3.dp))
         }
     }
 }
@@ -644,17 +599,18 @@ private fun RecentRow(
     recents: List<TvApp>,
     onOpen: (TvApp) -> Unit,
     onMenu: (TvApp) -> Unit,
+    compact: Boolean,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        Modifier.fillMaxWidth().padding(bottom = 4.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         recents.take(8).forEach { app ->
             DockIcon(
                 app = app,
-                size = 40.dp,
-                labels = "focus",
+                size = if (compact) 36.dp else 40.dp,
+                labels = if (compact) "never" else "focus",
                 modifier = Modifier.padding(horizontal = 6.dp),
                 onOpen = { onOpen(app) },
                 onMenu = { onMenu(app) },
